@@ -55,10 +55,31 @@ ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 # Funktionswoertern, die im Deutschen praktisch nicht vorkommen. Ab drei
 # Treffern ist es kein Zufall mehr - einzelne Fachwendungen wie "shared
 # decision making" oder "teach-back" bleiben damit unbeanstandet.
+#
+# Gezaehlt wird ueber Titel, Zusammenfassung UND Ergebnis zusammen. Bis zum
+# 09.09.2026 sah die Pruefung nur die Zusammenfassung, und an diesem Morgen
+# lieferte das Modell dem Versorgungsforschungs-Portal die GANZE Ausgabe auf
+# Englisch: sieben englische Titel, sieben englische Zusammenfassungen, sieben
+# englische Ergebnisse. Beanstandet wurden drei - die uebrigen vier hatten in
+# ihrer Zusammenfassung zufaellig nur zwei Funktionswoerter. Dass die Ausgabe
+# trotzdem stoppte, lag allein daran, dass drei von sieben ueber ANTEIL_AUS_MAX
+# liegen; bei zwei Beanstandungen waeren fuenf englische Studien versendet
+# worden. Ueber alle drei Felder gezaehlt reissen sechs der sieben die
+# Schwelle, waehrend der deutsche Bestand (152 Studien, nachgemessen) nie ueber
+# zwei Treffer kommt.
 ENGLISCH = re.compile(r"\b(the|of|and|was|were|with|that|this|from|"
                       r"have|has|been|their|its|which|among|between)\b",
                       re.IGNORECASE)
+ENGLISCH_FELDER = ("title", "sum", "result")
 ENGLISCH_SCHWELLE = 3
+# Zweite, niedrigere Schwelle - sie gilt nicht der einzelnen Studie, sondern
+# der Ausgabe: Reisst sie JEDE Studie, ist nicht eine Zusammenfassung
+# missglueckt, sondern der Lauf als Ganzes auf Englisch herausgekommen.
+# Einzeln waere sie zu scharf (vier von 152 deutschen Studien kommen auf zwei
+# Treffer, meist durch Eigennamen wie "China Health and Retirement
+# Longitudinal Study"); dass ausnahmslos alle Studien einer deutschen Ausgabe
+# darauf kommen, ist praktisch ausgeschlossen.
+ENGLISCH_AUSGABE_SCHWELLE = 2
 # Das Ergebnisfeld muss etwas aussagen - aber NICHT zwingend eine Zahl
 # enthalten. Qualitative Interviewstudien und Expertenpapiere sind seit dem
 # 18.08.2026 ausdruecklich zugelassen (Entscheidung des Herausgebers); eine
@@ -85,6 +106,12 @@ def _esummary(pmids: list[str]) -> dict:
 # Bewusst hoch angesetzt: Ein falscher Stopp kostet eine Ausgabe, ein
 # versehentlicher Vollversand an ueber 10.000 Menschen ist nicht zurueckholbar.
 ANTEIL_MAX = 0.9
+
+
+def _englisch(e: dict) -> int:
+    """Englische Funktionswoerter in Titel, Zusammenfassung und Ergebnis."""
+    text = " ".join(str(e.get(f, "")) for f in ENGLISCH_FELDER)
+    return len(ENGLISCH.findall(text))
 
 
 def pruefe_studie(e: dict, kopf: str) -> list[str]:
@@ -117,10 +144,11 @@ def pruefe_studie(e: dict, kopf: str) -> list[str]:
     if len(str(e.get("sum", ""))) < 80:
         m.append(f"{kopf}: Zusammenfassung ist verdaechtig kurz "
                  f"({len(str(e.get('sum', '')))} Zeichen)")
-    treffer = len(ENGLISCH.findall(str(e.get("sum", ""))))
+    treffer = _englisch(e)
     if treffer >= ENGLISCH_SCHWELLE:
-        m.append(f"{kopf}: Zusammenfassung enthaelt {treffer} englische "
-                 f"Funktionswoerter - vermutlich der englische Abstract")
+        m.append(f"{kopf}: Titel, Zusammenfassung und Ergebnis enthalten "
+                 f"{treffer} englische Funktionswoerter - vermutlich der "
+                 f"englische Abstract")
     if not 20 <= len(str(e.get("title", ""))) <= 200:
         m.append(f"{kopf}: Titellaenge ausserhalb 20-200 Zeichen "
                  f"({len(str(e.get('title', '')))})")
@@ -178,6 +206,15 @@ def pruefe(studien: list[dict], html: str = "", empfaenger: int | None = None,
 
     for i, e in enumerate(studien, 1):
         m += pruefe_studie(e, f"Studie {i} (PMID {e.get('pmid', '?')})")
+
+    # Die ganze Ausgabe auf Englisch - der Fall vom 09.09.2026. Er gehoert
+    # hierher und nicht in vorpruefung(): Was jede einzelne Studie betrifft,
+    # ist kein Formfehler an einer Studie, den man aussortieren koennte,
+    # sondern ein misslungener Lauf. Da bleibt nur der harte Stopp.
+    if all(_englisch(e) >= ENGLISCH_AUSGABE_SCHWELLE for e in studien):
+        m.append(f"jede der {len(studien)} Studien enthaelt mindestens "
+                 f"{ENGLISCH_AUSGABE_SCHWELLE} englische Funktionswoerter - "
+                 f"die Ausgabe ist vermutlich insgesamt englisch geblieben")
 
     pmids = [str(e.get("pmid", "")) for e in studien]
     doppelt = {p for p in pmids if pmids.count(p) > 1}
