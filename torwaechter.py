@@ -238,9 +238,33 @@ def pruefe(studien: list[dict], html: str = "", empfaenger: int | None = None,
                 if echt and ist and echt != ist:
                     m.append(f"PMID {e['pmid']}: Zeitschrift '{e['journal']}' "
                              f"stimmt nicht mit PubMed ('{d.get('source')}')")
-                jahr = (d.get("pubdate") or "")[:4]
-                if jahr and str(e.get("year", "")) not in (jahr, ""):
-                    m.append(f"PMID {e['pmid']}: Jahr {e.get('year')} statt {jahr}")
+                # Zulaessig ist JEDES Jahr, das PubMed selbst fuehrt - das des
+                # Hefts (pubdate) und das der Vorabveroeffentlichung
+                # (epubdate).
+                #
+                # Am 11.09.2026 stoppte der KI-Hub an PMID 42717858: pubdate
+                # "2026 Sep", epubdate "2025 Jul 26". Der Torwaechter verglich
+                # gegen das Heftjahr und meldete "Jahr 2025 statt 2026" - ein
+                # Fehlalarm, und zwar ein harter Stopp, der die ganze Ausgabe
+                # mitnahm.
+                #
+                # Die Ursache ist ein Regelwiderspruch: fetch_meta() leitet
+                # `year` aus der GENAUESTEN der beiden Angaben ab, hier also
+                # aus dem 26.07.2025 mit Tag. Diese Pruefung verglich dann die
+                # eine PubMed-Angabe gegen die andere. Sie stammt aus der Zeit,
+                # als `year` noch aus der Modellantwort kam; seit das Feld
+                # maschinell aus esummary entsteht, kann sie dort ueberhaupt
+                # keinen Modellfehler mehr finden - nur noch den normalen
+                # Abstand zwischen Online-first und Heft.
+                #
+                # Was bleibt, ist der Fall, um den es ging: ein Jahr, das
+                # PubMed ueberhaupt nicht kennt. Das ist weiter ein harter
+                # Stopp.
+                jahre = {j for j in ((d.get("pubdate") or "")[:4],
+                                     (d.get("epubdate") or "")[:4]) if j.isdigit()}
+                if jahre and str(e.get("year", "")) not in jahre | {""}:
+                    m.append(f"PMID {e['pmid']}: Jahr {e.get('year')} statt "
+                             f"{' oder '.join(sorted(jahre))}")
                 # Berichtigungen und Ruecknahmen tragen keine eigenen
                 # Ergebnisse. Die Abfrage schliesst sie aus; falls doch eine
                 # durchkommt, faellt sie hier auf - und zwar unter ihrem
