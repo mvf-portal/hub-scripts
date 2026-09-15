@@ -472,23 +472,38 @@ def rubriken_html(radar: list[dict], news: list[dict]) -> str:
 
 
 def sponsor_fuss() -> str:
-    """Der Sponsorenhinweis fuer die Fusszeile - leer, wenn es keinen gibt.
+    """Der Hinweis auf Sponsoren und Medienpartner - leer, wenn es keine gibt.
 
     Das Logo braucht hier eine ABSOLUTE Adresse: E-Mail-Programme loesen keine
     relativen Pfade auf. Sie zeigt auf das Portal selbst, nicht auf den Server
-    des Sponsors - damit gilt auch im Newsletter, was auf der Seite gilt.
+    des Unterstuetzers - damit gilt auch im Newsletter, was auf der Seite gilt.
+
+    Zwei Arten, zwei Wortlaute (siehe sponsoren.py). Die Medienkooperation
+    zeigt ihr Logo groesser und traegt den Unabhaengigkeitssatz als eigenen
+    Satz unter der Zeile - in der Fusszeile einer E-Mail gibt es kein
+    Kleingedrucktes, in das man ihn schieben koennte.
     """
-    liste = sponsoren.lade()
-    if not liste:
-        return ""
-    bilder = "".join(
-        f'<a href="{escape(s["u"])}" style="text-decoration:none;">'
-        f'<img src="{SEITE}/{escape(s["logo"])}" height="34" alt="{escape(s["n"])}"'
-        f' style="height:34px;width:auto;border:0;vertical-align:middle;margin-right:14px;"></a>'
-        for s in liste)
-    return (f'<p style="margin:0 0 14px;">'
-            f'<span style="display:block;margin-bottom:6px;">Gesponsert von '
-            f'&ndash; ohne Einfluss auf die Inhalte:</span>{bilder}</p>')
+    bloecke = []
+    for art, liste in sponsoren.gruppen():
+        hoehe = 48 if art == sponsoren.KOOP else 34
+        bilder = "".join(
+            f'<a href="{escape(s["u"])}" style="text-decoration:none;">'
+            f'<img src="{SEITE}/{escape(s["logo"])}" height="{hoehe}" alt="{escape(s["n"])}"'
+            f' style="height:{hoehe}px;width:auto;border:0;vertical-align:middle;margin-right:14px;"></a>'
+            for s in liste)
+        # Den Namen traegt das Logo, nicht die Zeile darueber - deshalb steht er
+        # hier nicht noch einmal. Beim Sponsor haengt die Zusage gleich an der
+        # Zeile, bei der Kooperation steht sie als eigener Satz darunter.
+        vor = escape(sponsoren.VOR[art] if art == sponsoren.KOOP
+                     else f'{sponsoren.VOR[sponsoren.SPONSOR]} '
+                          f'– {sponsoren.ZUSATZ[sponsoren.SPONSOR]}')
+        fuss = (f'<span style="display:block;margin-top:6px;">'
+                f'{escape(sponsoren.ZUSATZ[sponsoren.KOOP])}</span>'
+                if art == sponsoren.KOOP else "")
+        bloecke.append(f'<p style="margin:0 0 14px;">'
+                       f'<span style="display:block;margin-bottom:6px;">{vor}:</span>'
+                       f'{bilder}{fuss}</p>')
+    return "".join(bloecke)
 
 
 # Kein Versand am Wochenende. Die Hubs werden weiter taeglich aktualisiert -
