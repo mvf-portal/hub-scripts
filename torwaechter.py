@@ -126,7 +126,13 @@ def pruefe_studie(e: dict, kopf: str) -> list[str]:
         if not str(e.get(feld, "")).strip():
             m.append(f"{kopf}: Feld '{feld}' ist leer")
     if not str(e.get("pmid", "")).isdigit():
-        m.append(f"{kopf}: PMID ist keine Zahl")
+        # Den Wert mit repr() zeigen, nicht nur behaupten, er sei keine Zahl.
+        # Am 15.09.2026 lautete die Meldung "Studie 20 (PMID 42726202): PMID
+        # ist keine Zahl" - der Kopf druckt bereinigt, und so sah die Ursache
+        # aus wie ein Widerspruch. Mit repr() steht da ' 42726202', und das
+        # fuehrende Leerzeichen ist auf einen Blick zu sehen.
+        m.append(f"{kopf}: PMID ist keine Zahl: "
+                 f"{str(e.get('pmid', ''))!r}")
     text = " ".join(str(e.get(f, "")) for f in ("title", "sum", "result"))
     if "{{" in text or "}}" in text:
         m.append(f"{kopf}: unersetzter Platzhalter im Text")

@@ -404,6 +404,26 @@ def pick_studies(abstracts: str) -> list[dict]:
         raise RuntimeError(f"Modell nicht erreichbar: {letzter}") from letzter
     text = next(b.text for b in resp.content if b.type == "text")
     studies = json.loads(text)["studies"]
+    # Das Modell liefert alle Felder als Text - und schreibt gelegentlich ein
+    # Leerzeichen davor. Am 15.09.2026 im Kardio-Hub: sechs PMIDs kamen als
+    # " 42726202" statt "42726202". Der Schaden reichte weit ueber die Optik
+    # hinaus:
+    #   - Der Torwaechter verwarf sie mit "PMID ist keine Zahl" - isdigit()
+    #     prueft ohne strip(). Vier brauchbare Studien fielen aus der Ausgabe.
+    #   - Die Dublettenpruefung in update_archive() vergleicht auf das Zeichen
+    #     genau. " 42677938" galt als neu, obwohl "42677938" schon im Archiv
+    #     stand - zwei Studien doppelt.
+    #   - Im RSS-Feed standen eine kaputte PubMed-Adresse und eine kaputte
+    #     GUID. An der GUID erkennt Mailchimps RSS-Versand, was schon
+    #     hinausging; "pmid- 42677938" und "pmid-42677938" sind zwei
+    #     verschiedene, dieselbe Studie waere zweimal verschickt worden.
+    #
+    # Hier laeuft alles einmal durch. Deshalb wird hier bereinigt und nicht an
+    # den drei Stellen, an denen es wehtat.
+    for s in studies:
+        for feld, wert in s.items():
+            if isinstance(wert, str):
+                s[feld] = wert.strip()
     # Zu viele ist kein Grund abzubrechen: Die Auswahl ist nach Relevanz
     # geordnet, die vorderen sechs sind brauchbar. Am 17.08.2026 lieferte das
     # Modell trotz "waehle GENAU 6" neun Stueck - und weil das Schema keine
