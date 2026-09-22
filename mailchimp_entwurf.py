@@ -55,6 +55,7 @@ import os
 import pathlib
 import re
 import sys
+import time
 
 import sponsoren
 import torwaechter
@@ -587,6 +588,14 @@ def stopp_hinweis(studien: list[dict], link: str, gruende: list[str]) -> str:
 
 # ---------------------------------------------------------------- Mailchimp
 
+# Vier Versuche mit 5, 10 und 15 Sekunden Pause - hoechstens dreissig Sekunden
+# Verzug. Die Grenze der gleichzeitigen Verbindungen loest sich in Sekunden
+# auf, sobald die anderen Hubs fertig sind; laenger zu warten hilft nicht, und
+# bis zum Versand um 10:00 ist ohnehin Luft.
+MC_VERSUCHE = 4
+MC_PAUSE = 5
+
+
 class Mailchimp:
     def __init__(self, key: str):
         if "-" not in key:
@@ -596,11 +605,51 @@ class Mailchimp:
         self.auth = ("anystring", key)
 
     def _ruf(self, methode: str, pfad: str, **kw):
-        r = requests.request(methode, self.basis + pfad, auth=self.auth, timeout=45, **kw)
-        if not r.ok:
+        """Ein Mailchimp-Aufruf, mit Wiederholung bei 429.
+
+        Mailchimp laesst je Konto nur ZEHN gleichzeitige Verbindungen zu, und
+        alle fuenfzehn Hubs teilen sich ein Konto. Der Dirigent weckte sie bis
+        zum 22.09.2026 auf dieselbe Minute - an diesem Morgen fielen drei in
+        die Grenze:
+
+            429 "You have exceeded the limit of 10 simultaneous connections."
+
+        Pflege, NCD und Onkologie verloren dadurch ihre Ausgabe. Beim
+        Pflege-Hub traf es zwischen Anlegen und Terminieren: Der Entwurf lag
+        danach in Mailchimp, war aber nie terminiert, und jeder weitere Lauf
+        des Tages sah "Entwurf besteht bereits" und ging weiter. Aufgefallen
+        ist das erst der Versandkontrolle, eine Stunde nach dem Versandtermin -
+        der Workflow-Schritt traegt `continue-on-error: true` und blieb gruen.
+
+        Der Dirigent staffelt seinen Weckruf seither (dirigent.yml); das hier
+        ist die zweite Linie, denn gestaffelt heisst nicht einzeln.
+
+        Wiederholt wird NUR, was sicher wiederholbar ist:
+          - 429 immer. Die Anfrage wurde abgewiesen, nicht ausgefuehrt.
+          - 5xx nur bei GET. Ein POST /campaigns, das mit 500 antwortet, KANN
+            die Kampagne angelegt haben; ein zweiter Versuch legte dann eine
+            zweite an, und zwei gleichnamige Kampagnen sind der Doppelversand,
+            gegen den die halbe Datei geschrieben ist.
+        Alles andere - 400, 401, 404 - ist Schuld des Aufrufers und wird
+        unveraendert durchgereicht.
+        """
+        letzter = ""
+        for versuch in range(MC_VERSUCHE):
+            r = requests.request(methode, self.basis + pfad,
+                                 auth=self.auth, timeout=45, **kw)
+            if r.ok:
+                return r.json() if r.text else {}
             # Mailchimps Fehler stecken im Rumpf, nicht im Statustext.
-            raise SystemExit(f"Mailchimp {methode} {pfad}: {r.status_code} {r.text[:500]}")
-        return r.json() if r.text else {}
+            letzter = f"{r.status_code} {r.text[:500]}"
+            wiederholbar = r.status_code == 429 or (
+                r.status_code >= 500 and methode.upper() == "GET")
+            if not wiederholbar or versuch == MC_VERSUCHE - 1:
+                break
+            wart = MC_PAUSE * (versuch + 1)
+            print(f"Mailchimp {methode} {pfad}: {r.status_code} - "
+                  f"neuer Versuch in {wart}s ...")
+            time.sleep(wart)
+        raise SystemExit(f"Mailchimp {methode} {pfad}: {letzter}")
 
     def entwuerfe(self) -> list[dict]:
         """Entwuerfe UND bereits terminierte Kampagnen.
@@ -925,6 +974,46 @@ def main() -> int:
     entwuerfe = [(k, datum_aus_titel(k.get("settings", {}).get("title", "")))
                  for k in mc.entwuerfe()]
     eigene = [(k, d) for k, d in entwuerfe if d]
+
+    # Was von gestern oder frueher noch offen herumliegt, ist ueberholt: Seine
+    # Studien stecken vollstaendig im heutigen Bestand. Zwei Kampagnen mit
+    # ueberlappendem Inhalt sind eine Falle - man gibt beide frei und
+    # verschickt doppelt.
+    #
+    # Diese Schleife stand bis zum 22.09.2026 GANZ AM ENDE, hinter dem
+    # Terminieren. Sie raeumte damit nur auf, wenn der Lauf bis dorthin kam -
+    # und die Wege, auf denen er vorher zurueckkehrt, sind gerade die
+    # gestoerten Tage: "Nichts offen", "Keine neuen Studien heute", "Entwurf
+    # besteht bereits". Genau dann liegt aber etwas herum.
+    #
+    # Zweitens kann das Ueberholte TERMINIERT sein, und dann ist Loeschen
+    # allein zu wenig: Mailchimp will den Termin zuerst aufgehoben haben.
+    # Am 22.09.2026 ist dieser Fall entstanden. NCD und Onkologie verloren
+    # ihren Morgenlauf an Mailchimps Verbindungsgrenze; die verspaeteten
+    # GitHub-Crons bauten die Ausgaben um 10:41 Uhr nach - nach dem
+    # Versandtermin, also terminiert auf den FOLGETAG. Damit lagen zwei
+    # Kampagnen fuer denselben Morgen bereit: die nachgebaute unter dem Titel
+    # des Vortags und die regulaere des Folgetags. Die Doppelpruefung des
+    # Torwaechters vergleicht Titel und sah sie deshalb nicht als Paar.
+    #
+    # Ohne dieses Aufheben haette die Leserschaft beider Hubs am naechsten
+    # Morgen zwei Ausgaben bekommen - oder der Lauf waere an der abgewiesenen
+    # Loeschung gescheitert, nachdem die neue Kampagne bereits terminiert war.
+    # Beides Wege in denselben Doppelversand.
+    #
+    # Dass hier frueh geloescht wird, kostet nichts: Die Studien stehen in
+    # studien-archiv.json, nicht in der Kampagne. Verloren geht nur eine
+    # Huelle, die niemand mehr versenden soll.
+    ueberholt = [(k, d) for k, d in eigene if d < heute]
+    eigene = [(k, d) for k, d in eigene if d >= heute]
+    for k, _ in ueberholt:
+        if k.get("status") == "schedule":
+            mc.termin_aufheben(k["id"])
+            print(f"Ueberholte, aber noch TERMINIERTE Kampagne "
+                  f"'{k['settings']['title']}' - Termin aufgehoben.")
+        mc.loeschen(k["id"])
+        print(f"Ueberholte Kampagne geloescht: {k['settings']['title']}")
+
     neu_heute = any(e["aufgenommen"] == heute for e in offen)
 
     if not neu_heute and eigene and not neu:
@@ -1092,14 +1181,6 @@ def main() -> int:
         print(f"Torwaechter: nichts zu beanstanden - terminiert auf {termin}.")
         schreibe_status("terminiert", titel, betreff, offen, link, [], termin,
                         empfaenger, gesamt, aussortiert, signaturen)
-
-    # Aeltere, nie versendete Entwuerfe sind jetzt ueberholt: Ihre Studien
-    # stecken vollstaendig im neuen. Zwei Entwuerfe mit ueberlappendem Inhalt
-    # waeren eine Falle - man gibt beide frei und verschickt doppelt.
-    for k, d in eigene:
-        if d and d < heute:
-            mc.loeschen(k["id"])
-            print(f"Ueberholten Entwurf geloescht: {k['settings']['title']}")
 
     print(f"Entwurf angelegt: {titel} - {len(offen)} Studien aus {len(t)} Tag(en)")
     if len(t) > 1:
