@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -91,12 +92,58 @@ MIN_ERGEBNIS = 60
 PFLICHT = ("pmid", "title", "sum", "result", "journal", "year")
 
 
+# Drei Versuche mit 5 und 10 Sekunden Pause - wie beim Modellaufruf in
+# update_studies.py und aus demselben Grund.
+PUBMED_VERSUCHE = 3
+PUBMED_PAUSE = 5
+
+
 def _esummary(pmids: list[str]) -> dict:
-    """Zeitschrift und Jahr direkt bei PubMed nachschlagen."""
+    """Zeitschrift und Jahr direkt bei PubMed nachschlagen.
+
+    Eine Antwort OHNE jede der gefragten PMIDs gilt als misslungene Abfrage
+    und nicht als Befund. Der Unterschied hat am 22.09.2026 eine Ausgabe
+    gekostet: Der Longevity-Hub stoppte mit "PMID ... bei PubMed nicht
+    auffindbar" fuer ALLE SECHS Studien - und alle sechs gab es, mit Titel und
+    Zeitschrift, wie ein Nachschlagen am selben Nachmittag zeigte.
+
+    Die Ursache lag eine Ebene tiefer: Alle fuenfzehn Hubs fragten damals auf
+    dieselbe Minute an. Antwortet PubMed unter Last mit einem Rumpf ohne
+    `result`, dann war das Ergebnis hier ein leeres Verzeichnis, und die
+    Schleife in pruefe() meldete jede einzelne PMID als unauffindbar. Der
+    except-Zweig dort fing das NICHT: Geworfen wurde nichts, die Abfrage war
+    aus seiner Sicht geglueckt.
+
+    Dass ausnahmslos jede PMID einer Ausgabe unauffindbar ist, heisst in der
+    Praxis nie "das Modell hat sechs Studien erfunden" - die PMIDs stammen aus
+    genau der esearch-Antwort, die update_studies.py zuvor geholt hat. Es
+    heisst: gefragt wurde, geantwortet nicht.
+
+    Bleibt es nach allen Versuchen dabei, fliegt ein Fehler. Den faengt
+    pruefe() und macht daraus "Abgleich mit PubMed nicht moeglich" - weiter
+    ein Stopp, aber ein ehrlicher. Eine ungeprueft versendete Ausgabe waere
+    der schlechtere Tausch.
+    """
     daten = urllib.parse.urlencode({"db": "pubmed", "id": ",".join(pmids),
                                     "retmode": "json"}).encode()
-    with urllib.request.urlopen(ESUMMARY, data=daten, timeout=60) as r:
-        return json.load(r).get("result", {})
+    letzter = ""
+    for versuch in range(PUBMED_VERSUCHE):
+        try:
+            with urllib.request.urlopen(ESUMMARY, data=daten, timeout=60) as r:
+                res = json.load(r).get("result", {})
+            # Teiltreffer sind ein echtes Ergebnis: Fehlt EINE von sechs, ist
+            # das der Befund, fuer den diese Pruefung da ist.
+            if any(str(p) in res for p in pmids):
+                return res
+            letzter = "Antwort ohne jede der gefragten PMIDs"
+        except Exception as fehler:  # noqa: BLE001 - Netz weg, PubMed langsam
+            letzter = str(fehler)
+        if versuch < PUBMED_VERSUCHE - 1:
+            wart = PUBMED_PAUSE * (versuch + 1)
+            print(f"PubMed-Abgleich fehlgeschlagen ({letzter}); "
+                  f"neuer Versuch in {wart}s ...")
+            time.sleep(wart)
+    raise RuntimeError(f"{letzter} (nach {PUBMED_VERSUCHE} Versuchen)")
 
 
 # Anteil der Gesamtliste, ab dem eine Ausgabe nicht mehr als Segment gelten
