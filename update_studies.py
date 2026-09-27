@@ -95,8 +95,39 @@ SCHEMA = {
     },
 }
 
+# Wie lange ein Lauf insgesamt auf PubMed warten darf, und in welchen Schritten.
+#
+# Bis zum 27.09.2026 waren es drei Versuche mit 5 und 10 Sekunden Pause - nach
+# einer Viertelminute gab ein Lauf auf. An diesem Morgen antwortete PubMed von
+# 06:20 bis mindestens 06:25 Uhr mit "500 Internal Server Error", und alle
+# fuenfzehn Hubs, die der Dirigent nacheinander weckte, starben daran. Erst die
+# Laufwache holte sie um 09:46 Uhr nach - an einem Versandtag eine Viertelstunde
+# vor Schluss.
+#
+# Das Budget gilt fuer den ganzen Lauf, nicht je Aufruf: _get() wird mehrmals
+# gerufen (zwei Suchen, efetch, esummary), und der Job hat 15 Minuten
+# (timeout-minutes im Workflow). Acht Minuten Warten lassen Luft fuer Checkout,
+# Modellanfrage und Push. Ist das Budget verbraucht, bekommt jeder weitere
+# Aufruf noch seinen ersten Versuch, wartet aber nicht mehr.
+PUBMED_PAUSEN = (15, 30, 60, 120, 180)
+PUBMED_BUDGET = 8 * 60
+_pubmed_gewartet = 0
+
+
+def _wiederholbar(exc: requests.RequestException) -> bool:
+    """Lohnt ein neuer Versuch? Bei Verbindungsfehlern, 429 und 5xx ja.
+
+    Ein anderer 4xx (etwa 414, zu lange Adresse, oder 400) kommt beim zweiten
+    Mal genauso zurueck - darauf Minuten zu warten, verschoebe nur den Abbruch.
+    """
+    antwort = getattr(exc, "response", None)
+    if antwort is None:
+        return True
+    return antwort.status_code == 429 or antwort.status_code >= 500
+
+
 def _get(path: str, params: dict, timeout: int) -> requests.Response:
-    """Abfrage mit drei Versuchen - PubMed ist gelegentlich kurz nicht erreichbar.
+    """Abfrage mit Wiederholung - PubMed ist gelegentlich minutenlang nicht erreichbar.
 
     **POST, nicht GET.** Die Abfrage steht im Rumpf, nicht in der Adresse. Als
     GET scheitert ein langer Suchausdruck mit HTTP 414 (Request-URI Too Long),
@@ -107,19 +138,27 @@ def _get(path: str, params: dict, timeout: int) -> requests.Response:
     die Antwort ist dieselbe. Der Name bleibt `_get`, damit die Aufrufstellen
     unveraendert bleiben - was er tut, steht hier.
     """
+    global _pubmed_gewartet
     params = {**params, "tool": NCBI_TOOL, "email": NCBI_EMAIL}
     last: Exception | None = None
-    for attempt in range(3):
+    for versuch in range(len(PUBMED_PAUSEN) + 1):
         try:
             r = requests.post(f"{EUTILS}/{path}", data=params, timeout=timeout)
             r.raise_for_status()
             return r
         except requests.RequestException as exc:
             last = exc
-            if attempt < 2:
-                wait = 5 * (attempt + 1)
-                print(f"PubMed-Abruf fehlgeschlagen ({exc}); neuer Versuch in {wait}s ...")
-                time.sleep(wait)
+            if not _wiederholbar(exc) or versuch == len(PUBMED_PAUSEN):
+                break
+            wait = min(PUBMED_PAUSEN[versuch], PUBMED_BUDGET - _pubmed_gewartet)
+            if wait <= 0:
+                print(f"PubMed-Abruf fehlgeschlagen ({exc}); Wartebudget von "
+                      f"{PUBMED_BUDGET // 60} Minuten fuer diesen Lauf ist aufgebraucht.")
+                break
+            print(f"PubMed-Abruf fehlgeschlagen ({exc}); neuer Versuch in {wait}s "
+                  f"(bisher {_pubmed_gewartet}s gewartet) ...")
+            time.sleep(wait)
+            _pubmed_gewartet += wait
     raise RuntimeError(f"PubMed nicht erreichbar: {last}")
 
 
@@ -367,7 +406,7 @@ def pick_studies(abstracts: str) -> list[dict]:
     # Nur strukturierte Ausgabe erzwingen (kein effort/thinking), damit es auch
     # mit guenstigen Modellen wie claude-haiku-4-5 laeuft (die effort/thinking
     # nicht unterstuetzen).
-    # Drei Versuche - wie der PubMed-Abruf in _get(), und aus demselben Grund.
+    # Drei Versuche - aus demselben Grund wie beim PubMed-Abruf in _get().
     #
     # Ein einziger Aussetzer hat hier zweimal einen ganzen Lauf beendet: am
     # 30.08.2026 im NCD-Hub mit einem 500er, am 03.09.2026 im Impf-Hub mit
