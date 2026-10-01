@@ -579,6 +579,13 @@ def main() -> int:
                    help="Auswahl fuer einen zurueckliegenden Aufnahmetag nachholen. "
                         "Schreibt NUR ins Archiv - die Seite behaelt ihre aktuelle "
                         "Auswahl, und der Newsletter uebergeht die Eintraege.")
+    # Bis zum 01.10.2026 fehlte dieser Eintrag: main() fragte "--erzwingen" in
+    # sys.argv ab, argparse kannte den Schalter aber nicht und brach mit
+    # "unrecognized arguments" ab. Der Workflow-Schalter "erzwingen" war damit
+    # seit der Einfuehrung von --nachtrag tot - aufgefallen erst, als er beim
+    # englisch gebliebenen Kardio-Lauf gebraucht wurde.
+    a.add_argument("--erzwingen", action="store_true",
+                   help="Auswahl des Tages neu wuerfeln, auch wenn heute schon gelaufen.")
     args = a.parse_args()
     if args.nachtrag:
         try:
@@ -593,7 +600,7 @@ def main() -> int:
         print(f"Nachtrag fuer den {tag.strftime('%d.%m.%Y')} "
               f"(Aufnahmetag in PubMed, nur Archiv).")
 
-    if not NACHTRAG_TAG and "--erzwingen" not in sys.argv and schon_heute_gelaufen():
+    if not NACHTRAG_TAG and not args.erzwingen and schon_heute_gelaufen():
         print("Fuer heute stehen bereits Studien im Archiv - nichts zu tun. "
               "(--erzwingen wuerfelt die Auswahl des Tages neu.)")
         return 0
