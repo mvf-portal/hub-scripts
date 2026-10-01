@@ -401,7 +401,7 @@ def fetch_meta(pmids: list[str]) -> dict[str, dict]:
     return aus
 
 
-def pick_studies(abstracts: str) -> list[dict]:
+def pick_studies(abstracts: str, zusatz: str = "") -> list[dict]:
     client = anthropic.Anthropic()
     # Nur strukturierte Ausgabe erzwingen (kein effort/thinking), damit es auch
     # mit guenstigen Modellen wie claude-haiku-4-5 laeuft (die effort/thinking
@@ -430,7 +430,7 @@ def pick_studies(abstracts: str) -> list[dict]:
                 output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
                 system=SYSTEM,
                 messages=[{"role": "user",
-                           "content": USER_TEMPLATE.format(abstracts=abstracts)}],
+                           "content": USER_TEMPLATE.format(abstracts=abstracts) + zusatz}],
             )
             break
         except anthropic.APIError as exc:
@@ -478,6 +478,58 @@ def pick_studies(abstracts: str) -> list[dict]:
         raise RuntimeError(f"Unerwartete Studienanzahl: {len(studies)}")
     POOLZAHLEN["gewaehlt"] = len(studies)
     return studies
+
+
+# Am 01.10.2026 kamen im Kardio-Hub alle sechs Studien auf Englisch zurueck -
+# Titel, Zusammenfassung, Ergebnis, Uebertragbarkeit; nur die Dezimalkommas
+# waren deutsch. Der Prompt verlangt Deutsch, die sieben Tage davor waren
+# deutsch: ein Ausrutscher des Modells. Der Torwaechter hat den Versand
+# gestoppt, aber erst NACH dem Commit - die englischen Eintraege standen da
+# schon auf der Seite und im Archiv, und das Archiv sperrte die sechs Studien
+# zugleich fuer jeden Neulauf.
+#
+# Deshalb wird hier geprueft, bevor irgendetwas geschrieben wird, und zwar mit
+# derselben Erkennung wie im Torwaechter (gleiche Woerter, gleiche Schwelle) -
+# sonst urteilten zwei Stellen verschieden ueber dieselbe Studie.
+DEUTSCH_NACHDRUCK = (
+    "\n\nACHTUNG: Ein vorheriger Versuch hat title, sum, result und transfer auf "
+    "Englisch geliefert. Schreibe diese Felder AUSSCHLIESSLICH auf Deutsch - "
+    "nur etablierte Fachbegriffe bleiben englisch.")
+
+
+def auswahl_auf_deutsch(abstracts: str) -> list[dict]:
+    """pick_studies() mit Sprachpruefung und hoechstens einem zweiten Versuch.
+
+    Bleibt auch der zweite Versuch teilweise englisch, wird der bessere der
+    beiden genommen und das Englische herausgenommen - mit Zahl im Protokoll.
+    Reicht der Rest nicht fuer ANZAHL_MIN, scheitert der Lauf sichtbar: Seite
+    und Archiv bleiben unberuehrt, und die Laufwache stoesst spaeter neu an.
+    """
+    from torwaechter import ENGLISCH_SCHWELLE, _englisch
+
+    def englische(studien: list[dict]) -> list[dict]:
+        return [s for s in studien if _englisch(s) >= ENGLISCH_SCHWELLE]
+
+    erste = pick_studies(abstracts)
+    eng = englische(erste)
+    if not eng:
+        return erste
+    print(f"Sprachpruefung: {len(eng)} von {len(erste)} Studien auf Englisch "
+          f"({', '.join(s['pmid'] for s in eng)}) - frage einmal neu an.")
+    zweite = pick_studies(abstracts, DEUTSCH_NACHDRUCK)
+    eng2 = englische(zweite)
+    if not eng2:
+        print(f"Sprachpruefung: zweiter Versuch deutsch ({len(zweite)} Studien).")
+        return zweite
+    beste, rest_eng = (zweite, eng2) if len(eng2) <= len(eng) else (erste, eng)
+    deutsch = [s for s in beste if s not in rest_eng]
+    print(f"Sprachpruefung: auch der zweite Versuch hat {len(eng2)} englische "
+          f"Studie(n); genommen wird der Versuch mit weniger, "
+          f"{len(rest_eng)} englische fallen heraus, {len(deutsch)} bleiben.")
+    if len(deutsch) < ANZAHL_MIN:
+        raise RuntimeError("Studienauswahl zweimal auf Englisch - nichts geschrieben.")
+    POOLZAHLEN["gewaehlt"] = len(deutsch)
+    return deutsch
 
 
 def build_block(studies: list[dict], status: str = "neu") -> str:
@@ -606,7 +658,7 @@ def main() -> int:
         return 0
 
     abstracts = fetch_pubmed()
-    studies = pick_studies(abstracts)
+    studies = auswahl_auf_deutsch(abstracts)
     meta = fetch_meta([s["pmid"] for s in studies])
     for s in studies:
         s.update(meta.get(s["pmid"], {"author": "", "pubdate": "", "added": "", "_sort": ""}))
