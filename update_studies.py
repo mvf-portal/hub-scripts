@@ -171,6 +171,33 @@ def _get(path: str, params: dict, timeout: int) -> requests.Response:
 AUSSCHLUSS = ('NOT ("Published Erratum"[pt] OR "Retraction of Publication"[pt] '
               'OR "Retracted Publication"[pt] OR "Duplicate Publication"[pt])')
 
+# Tierversuche und reine Laborarbeiten gehoeren in keinen Hub - die Leserschaft
+# arbeitet in der Versorgung. Am 01.10.2026 stand im Kardio-Newsletter ein
+# Mausversuch ("Immune responses following myocardial infarction in aged
+# mice") und musste zwanzig Minuten vor dem Versand von Hand heraus.
+#
+# Zwei Wege, weil einer nicht reicht: Der MeSH-Filter greift nur bei
+# verschlagworteten Arbeiten, und die tagesfrischen sind es fast nie - der
+# Mausversuch hatte am Versandtag noch kein einziges Schlagwort. Deshalb
+# zusaetzlich Titelwoerter. Die gelten NICHT, wenn der Titel zugleich Menschen
+# nennt (Mischstudien, Kohorten mit In-vitro-Teil), und "in vitro" gilt nicht
+# bei Fertilisation, Reifung, IVF und Diagnostika - das sind Humanstudien.
+# "canine" steht bewusst nicht darin: tiergestuetzte Therapie in der
+# Psychiatrie ist Versorgung.
+#
+# Gemessen am 01.10.2026 ueber 365 Tage: Der Filter nimmt je Hub 0 bis 2,8 %
+# (Kardio 185 von 6.559, Diabetes 121 von 4.568), in der Titelprobe fast nur
+# Tier- und Zellarbeiten. Dahinter stehen zwei weitere Stufen: die Regel im
+# Prompt (TIER_REGEL) und die Nachkontrolle in auswahl_pruefen().
+TIER_AUSSCHLUSS = (
+    'NOT ((animals[mh] NOT humans[mh]) OR ((mice[ti] OR mouse[ti] OR murine[ti] '
+    'OR rat[ti] OR rats[ti] OR rodent*[ti] OR zebrafish[ti] OR porcine[ti] '
+    'OR swine[ti] OR "animal model"[ti] OR "animal models"[ti] '
+    'OR ("in vitro"[ti] NOT (fertili*[ti] OR maturation[ti] OR IVF[ti] OR diagnos*[ti])) '
+    'OR "cell line"[ti] OR "cell lines"[ti]) '
+    'NOT (human[ti] OR humans[ti] OR patient*[ti] OR adults[ti] OR cohort[ti] '
+    'OR women[ti] OR men[ti] OR children[ti])))')
+
 
 # Beim Nachtrag wird die Abfrage auf EINEN Tag eingeschnuert. Massgeblich ist
 # [EDAT] - der Tag, an dem PubMed die Arbeit aufgenommen hat, nicht das
@@ -247,7 +274,8 @@ def _suche(term: str, anzahl: int, bekannt: set[str] | None = None) -> list[str]
     faktor = 4 if bekannt else 1
     r = _get(
         "esearch.fcgi",
-        {"db": "pubmed", "term": f"({_fenster(term)}) {AUSSCHLUSS}", "sort": "date",
+        {"db": "pubmed", "term": f"({_fenster(term)}) {AUSSCHLUSS} {TIER_AUSSCHLUSS}",
+         "sort": "date",
          "retmax": str(min(anzahl * faktor, 200)), "retmode": "json"},
         timeout=30,
     )
@@ -430,7 +458,8 @@ def pick_studies(abstracts: str, zusatz: str = "") -> list[dict]:
                 output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
                 system=SYSTEM,
                 messages=[{"role": "user",
-                           "content": USER_TEMPLATE.format(abstracts=abstracts) + zusatz}],
+                           "content": USER_TEMPLATE.format(abstracts=abstracts)
+                                      + TIER_REGEL + zusatz}],
             )
             break
         except anthropic.APIError as exc:
@@ -530,6 +559,53 @@ def auswahl_auf_deutsch(abstracts: str) -> list[dict]:
         raise RuntimeError("Studienauswahl zweimal auf Englisch - nichts geschrieben.")
     POOLZAHLEN["gewaehlt"] = len(deutsch)
     return deutsch
+
+
+# Zweite Stufe gegen Tierversuche (die erste ist TIER_AUSSCHLUSS in der
+# Abfrage): Was durch den Titelfilter rutscht, weil der Titel das Versuchstier
+# nicht nennt, steht meist im Abstract - das liest nur das Modell.
+TIER_REGEL = (
+    "\n\nAUSSCHLUSS: Waehle KEINE Tierversuche (Maus, Ratte, andere Versuchstiere), "
+    "keine reinen Labor-, Zell- oder In-vitro-Arbeiten und keine praeklinischen "
+    "Mechanismusstudien. Die Leserschaft arbeitet in der Versorgung von Menschen.")
+
+# Dritte Stufe: Nachkontrolle der deutschen Ausgabe. Gleiche Ausnahme wie in
+# der Abfrage - nennt der Text zugleich Menschen, bleibt die Studie.
+#
+# "praeklinisch" steht bewusst NICHT darin: Im deutschen Rettungswesen heisst
+# es "vor dem Krankenhaus". Gegen alle 2.559 Archiveintraege gemessen
+# (01.10.2026) haette es eine Schlaganfall-Erkennung im Rettungsdienst und eine
+# Reanimationsstudie aus dem deutschen Register herausgeworfen - beides
+# Versorgungsforschung. Ohne das Wort bleiben 12 Treffer, alle Tier- oder
+# Laborarbeiten.
+TIER_WORTE = re.compile(
+    r"\b(Maus|Mäuse|Mäusen|murin\w*|Ratte|Ratten|"
+    r"Nagetier\w*|Zebrafisch\w*|Tiermodell\w*|Tierversuch\w*|tierexperimentell\w*|"
+    r"in vitro|In-vitro-\w+|Zelllinie\w*|Zellkultur\w*)", re.I)
+MENSCH_WORTE = re.compile(
+    r"\b(Patient\w*|Mensch\w*|Erwachsene\w*|Kohorte\w*|Frauen|Männer\w*|Kinder\w*|"
+    r"Proband\w*|Teilnehmer\w*|Versicherte\w*|Humanstudie\w*)", re.I)
+
+
+def ist_tierversuch(s: dict) -> bool:
+    text = f"{s.get('title', '')} {s.get('sum', '')}"
+    return bool(TIER_WORTE.search(text)) and not MENSCH_WORTE.search(text)
+
+
+def auswahl_pruefen(abstracts: str) -> list[dict]:
+    """Sprachpruefung, dann Tierversuche heraus - beides vor dem Schreiben."""
+    studies = auswahl_auf_deutsch(abstracts)
+    tier = [s for s in studies if ist_tierversuch(s)]
+    if not tier:
+        return studies
+    rest = [s for s in studies if s not in tier]
+    print(f"Tierversuch-Kontrolle: {len(tier)} herausgenommen "
+          f"({', '.join(s['pmid'] + ' ' + s['title'][:60] for s in tier)}), "
+          f"{len(rest)} bleiben.")
+    if len(rest) < ANZAHL_MIN:
+        raise RuntimeError("Nach der Tierversuch-Kontrolle bleibt nichts - nichts geschrieben.")
+    POOLZAHLEN["gewaehlt"] = len(rest)
+    return rest
 
 
 def build_block(studies: list[dict], status: str = "neu") -> str:
@@ -658,7 +734,7 @@ def main() -> int:
         return 0
 
     abstracts = fetch_pubmed()
-    studies = auswahl_auf_deutsch(abstracts)
+    studies = auswahl_pruefen(abstracts)
     meta = fetch_meta([s["pmid"] for s in studies])
     for s in studies:
         s.update(meta.get(s["pmid"], {"author": "", "pubdate": "", "added": "", "_sort": ""}))
