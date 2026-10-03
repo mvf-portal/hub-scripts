@@ -448,19 +448,34 @@ def pick_studies(abstracts: str, zusatz: str = "") -> list[dict]:
     # andere, und der Preis liegt bei fuenfzehn Sekunden: Ist die Anfrage
     # wirklich fehlerhaft, scheitern alle drei Versuche und der Fehler steht
     # unveraendert im Protokoll.
+    #
+    # Abgeschnittene Antworten zaehlen ebenfalls als Fehlversuch. Am
+    # 03.10.2026 endete die Antwort im NCD-Hub nach 20.368 Zeichen mitten
+    # in einer Zeichenkette - die Grenze von 8.000 Tokens war erreicht,
+    # vermutlich weil das Modell weit mehr als sechs Studien lieferte (das
+    # Schema laesst keine Laengenbegrenzung zu, siehe SCHEMA). json.loads
+    # brach mit "Unterminated string" ab, der ganze Lauf mit ihm. Deshalb
+    # mehr Spielraum und bei stop_reason "max_tokens" ein neuer Versuch;
+    # gekappt wird danach ohnehin auf ANZAHL_SOLL.
     letzter: Exception | None = None
     resp = None
     for versuch in range(3):
         try:
             resp = client.messages.create(
                 model=MODEL,
-                max_tokens=8000,
+                max_tokens=16000,
                 output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
                 system=SYSTEM,
                 messages=[{"role": "user",
                            "content": USER_TEMPLATE.format(abstracts=abstracts)
                                       + TIER_REGEL + zusatz}],
             )
+            if resp.stop_reason == "max_tokens":
+                letzter = RuntimeError("Antwort an der Token-Grenze abgeschnitten")
+                print(f"Modellantwort abgeschnitten (stop_reason max_tokens, "
+                      f"{resp.usage.output_tokens} Tokens); neuer Versuch ...")
+                resp = None
+                continue
             break
         except anthropic.APIError as exc:
             letzter = exc
