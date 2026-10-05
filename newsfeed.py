@@ -91,13 +91,24 @@ ENDE_PRESSE = "// === PRESSE-BLOCK-ENDE ==="
 #          "Ein Hals kratzt selten allein". Traegt trotzdem bei: Verbaende,
 #          Kassen und Politik melden hier zuerst.
 # Reihenfolge ist Rangfolge: idw zuerst, presseportal nur, was danach noch
-# fehlt - und dort nur, wenn das Thema im TITEL steht. Entscheidung des
-# Herausgebers vom 29.08.2026: presseportal nur, wenn der Inhalt nicht flach
-# wird. Ein Anrisstext, in dem das Stichwort irgendwo faellt, reicht bei einer
-# PR-Meldung nicht; im Titel steht, worum es wirklich geht.
+# fehlt. Der dritte Wert sagt, ob das Thema im TITEL stehen muss.
+#
+# Fuer presseportal galt das seit dem 29.08.2026 (Entscheidung des
+# Herausgebers: nur, wenn der Inhalt nicht flach wird) - seit dem 05.10.2026
+# gilt es auch fuer idw. Nachgemessen ueber alle fuenfzehn Hubs: 46 Treffer mit
+# Anrisstext, 21 mit Titelpflicht. Die 25, die wegfallen, sind fast durchweg
+# die Sorte, die der Rubrik schadet - "Prof. Christina Weisheit uebernimmt
+# Leitung der Anaesthesiologie" im Kardio-Hub, "Rund 300 Erstis beginnen ihr
+# Studium" bei Psychischer Gesundheit, "Grundstein fuer klinischen
+# Erweiterungsbau" in der Onkologie. Hereingekommen ueber ein Stichwort, das
+# irgendwo im Anrisstext fiel.
+#
+# Vier Hubs gehen seither in dieser Rubrik leer aus. Das ist der bessere
+# Zustand: Eine verborgene Rubrik sagt nichts Falsches, eine Personalie unter
+# "Weitere Pressemeldungen zum Thema" schon.
 PRESSE_FEEDS = [
     ("idw", "https://idw-online.de/pages/de/pressreleasesrss?field_ids=400",
-     False),
+     True),
     ("presseportal.de",
      "https://www.presseportal.de/rss/gesundheit-medizin.rss2", True),
 ]
@@ -377,6 +388,23 @@ def schon_da(titel: str, eigene: list[str]) -> bool:
     return any(len(meine & kernwoerter(e)) >= 3 for e in eigene)
 
 
+def gleiche_meldung(e: dict, gesehen: set, titel: set) -> bool:
+    """Steht diese Meldung schon in der Liste - unter welcher Adresse auch immer?
+
+    Zwei Merkmale, weil keines allein reicht. Am 05.10.2026 im Kardio-Hub:
+    "Perkutan implantierter interatrialer Shunt zur Behandlung der
+    Herzinsuffizienz" stand zweimal unter "Aus der Selbstverwaltung" - derselbe
+    G-BA-Beschluss liegt in zwei Feeds unter zwei Adressen
+    (methodenbewertung/338/ und /345/). Die Adressen zu vergleichen genuegte
+    also nicht.
+
+    Umgekehrt genuegt der Titel auch nicht: Dieselbe Bekanntmachung heisst bei
+    foerderinfo anders als beim Innovationsfonds - derselbe Fall im Radar, nur
+    andersherum (siehe entdoppeln() in ausschreibungen.py).
+    """
+    return e["url"] in gesehen or e["titel"].casefold() in titel
+
+
 def presse(begriffe: list[str], eigene: list[str] | None = None) -> list[dict]:
     """Fremde Pressemeldungen zum Thema dieses Hubs.
 
@@ -385,13 +413,15 @@ def presse(begriffe: list[str], eigene: list[str] | None = None) -> list[dict]:
     und zwar ueber Titel und Anrisstext. Was den Begriff nicht traegt, kommt
     nicht auf die Seite - lieber eine leere Rubrik als eine beliebige.
     """
-    gefunden, gesehen = [], set()
+    gefunden, gesehen, titel = [], set(), set()
     for name, adresse, nur_titel in PRESSE_FEEDS:
         if len(gefunden) >= PRESSE_MAX:
             break                      # idw hat gereicht
         teil = []
         for e in presse_feed(name, adresse):
-            if not e["titel"] or not e["url"] or e["url"] in gesehen:
+            if not e["titel"] or not e["url"]:
+                continue
+            if gleiche_meldung(e, gesehen, titel):
                 continue
             if schon_da(e["titel"], eigene or []):
                 continue      # steht schon oben als eigener Beitrag
@@ -399,6 +429,7 @@ def presse(begriffe: list[str], eigene: list[str] | None = None) -> list[dict]:
                      "excerpt": {"rendered": "" if nur_titel else e["text"]}}
             if any(trifft(probe, b) for b in begriffe):
                 gesehen.add(e["url"])
+                titel.add(e["titel"].casefold())
                 teil.append(e)
         teil.sort(key=lambda e: e.get("datum") or "", reverse=True)
         gefunden += teil[:PRESSE_MAX - len(gefunden)]
@@ -409,10 +440,12 @@ def presse(begriffe: list[str], eigene: list[str] | None = None) -> list[dict]:
 def selbstverwaltung(begriffe: list[str], alles: bool,
                      eigene: list[str] | None = None) -> list[dict]:
     """Meldungen des G-BA - im Versorgungsforschungs-Hub alle, sonst gefiltert."""
-    gefunden, gesehen = [], set()
+    gefunden, gesehen, titel = [], set(), set()
     for name, adresse in SELBST_FEEDS:
         for e in presse_feed(name, adresse):
-            if not e["titel"] or not e["url"] or e["url"] in gesehen:
+            if not e["titel"] or not e["url"]:
+                continue
+            if gleiche_meldung(e, gesehen, titel):
                 continue
             if schon_da(e["titel"], eigene or []):
                 continue      # steht schon oben als eigener Beitrag
@@ -420,6 +453,7 @@ def selbstverwaltung(begriffe: list[str], alles: bool,
                      "excerpt": {"rendered": e["text"]}}
             if alles or any(trifft(probe, b) for b in begriffe):
                 gesehen.add(e["url"])
+                titel.add(e["titel"].casefold())
                 gefunden.append(e)
     gefunden.sort(key=lambda e: e.get("datum") or "", reverse=True)
     return gefunden[:SELBST_MAX]
