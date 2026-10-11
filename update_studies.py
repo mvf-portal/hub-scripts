@@ -78,11 +78,15 @@ SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["journal", "year", "pmid", "title", "sum", "result", "transfer"],
+                "required": ["journal", "year", "pmid", "titel_original", "title",
+                             "sum", "result", "transfer"],
                 "properties": {
                     "journal": {"type": "string"},
                     "year": {"type": "string"},
                     "pmid": {"type": "string"},
+                    # Englischer Originaltitel, woertlich aus dem Abstract-Block.
+                    # Nur zur Kontrolle der PMID - siehe pmid_abgleich().
+                    "titel_original": {"type": "string"},
                     "title": {"type": "string"},
                     "sum": {"type": "string"},
                     "result": {"type": "string"},
@@ -220,6 +224,9 @@ def _fenster(term: str) -> str:
 # erfolgreich, das Archiv bekam nichts, und niemand konnte sehen, woran es lag.
 POOLZAHLEN = {"geholt": 0, "bekannt": 0, "pool": 0, "gewaehlt": 0, "neu": 0}
 
+# Die PMIDs des Pools, aus dem das Modell gewaehlt hat - fuer pmid_abgleich().
+POOL_IDS: list[str] = []
+
 
 def schreibe_poolzahlen() -> None:
     """Legt die Zahlen fuer mailchimp_entwurf.py im Arbeitsverzeichnis ab.
@@ -319,6 +326,7 @@ def fetch_pubmed() -> str:
     else:
         ids = allgemein + [p for p in europa if p not in allgemein]
     POOLZAHLEN["pool"] = len(ids)
+    POOL_IDS[:] = ids
     if not ids:
         raise RuntimeError("esearch lieferte keine PMIDs")
     print(f"{len(europa)} mit Europa-/Deutschlandbezug, {len(allgemein)} weltweit, "
@@ -468,7 +476,7 @@ def pick_studies(abstracts: str, zusatz: str = "") -> list[dict]:
                 system=SYSTEM,
                 messages=[{"role": "user",
                            "content": USER_TEMPLATE.format(abstracts=abstracts)
-                                      + TIER_REGEL + zusatz}],
+                                      + TIER_REGEL + HERKUNFT_REGEL + zusatz}],
             )
             if resp.stop_reason == "max_tokens":
                 letzter = RuntimeError("Antwort an der Token-Grenze abgeschnitten")
@@ -583,6 +591,89 @@ TIER_REGEL = (
     "\n\nAUSSCHLUSS: Waehle KEINE Tierversuche (Maus, Ratte, andere Versuchstiere), "
     "keine reinen Labor-, Zell- oder In-vitro-Arbeiten und keine praeklinischen "
     "Mechanismusstudien. Die Leserschaft arbeitet in der Versorgung von Menschen.")
+
+# Zwei Fehler, die am 11.10.2026 bei einer Pruefung aller 4.224 Archiveintraege
+# gegen PubMed auffielen:
+#
+# 1. Das Land im Titel. Aus einer daenischen Registerstudie wurde "...: Deutschland",
+#    aus einer italienischen Konsensarbeit eine "Implementierungs-Roadmap fuer
+#    Deutschland" (beide Kardio), aus Schweden die Schweiz (KI-Hub). Das Modell
+#    hatte den Uebertragbarkeitshinweis in den Titel gezogen - der Prompt
+#    verlangt die Einordnung fuer Deutschland, und sie landete im falschen Feld.
+#
+# 2. Die PMID. Deutscher Text und PMID gehoerten zu verschiedenen Arbeiten: Unter
+#    "Raeumliche Erreichbarkeit stationaerer Hospize in Deutschland" stand die ID
+#    einer chinesischen Multimorbiditaetskohorte. fetch_meta() holt Journal und
+#    Jahr zur PMID - und machte die falsche Zuordnung damit unsichtbar, denn auch
+#    der Torwaechter prueft nur, ob Journal und PMID zusammenpassen, und das tun
+#    sie dann immer. Abhilfe: Das Modell schreibt den Originaltitel ab, und
+#    pmid_abgleich() vergleicht ihn mit dem PubMed-Titel zur genannten PMID.
+HERKUNFT_REGEL = (
+    "\n\nHERKUNFT UND PMID: Nenne im deutschen Titel ein Land nur, wenn die Studie "
+    "dort durchgefuehrt wurde oder ihre Daten von dort stammen. Die Einordnung fuer "
+    "Deutschland gehoert AUSSCHLIESSLICH in transfer, nie in title. "
+    "Schreibe in titel_original den englischen Originaltitel der Arbeit WOERTLICH ab, "
+    "so wie er im Abstract-Block steht, und nimm als pmid die Nummer aus der Zeile "
+    "'PMID:' DESSELBEN Blocks.")
+
+
+def _titelwoerter(t: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]{3,}", (t or "").lower()))
+
+
+def _aehnlich(a: str, b: str) -> float:
+    wa, wb = _titelwoerter(a), _titelwoerter(b)
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
+
+PMID_SCHWELLE = 0.5
+
+
+def pmid_abgleich(studies: list[dict]) -> list[dict]:
+    """Prueft, ob die PMID zu der Arbeit gehoert, die das Modell zusammengefasst hat.
+
+    Massstab ist der abgeschriebene Originaltitel. Passt er nicht zum PubMed-Titel
+    der genannten PMID, wird im Pool die Arbeit gesucht, zu der er passt, und die
+    PMID ersetzt. Findet sich keine, faellt die Studie heraus - eine Zusammenfassung
+    unter fremder Nummer ist schlimmer als eine Studie weniger.
+    """
+    ids = list(dict.fromkeys(POOL_IDS + [s["pmid"] for s in studies if s["pmid"].isdigit()]))
+    titel: dict[str, str] = {}
+    for i in range(0, len(ids), 200):
+        r = _get("esummary.fcgi",
+                 {"db": "pubmed", "retmode": "json", "id": ",".join(ids[i:i + 200])},
+                 timeout=60)
+        for pm, e in r.json().get("result", {}).items():
+            if isinstance(e, dict) and e.get("title"):
+                titel[pm] = e["title"]
+    behalten = []
+    for s in studies:
+        orig = s.pop("titel_original", "")
+        if _aehnlich(orig, titel.get(s["pmid"], "")) >= PMID_SCHWELLE:
+            behalten.append(s)
+            continue
+        beste, wert = None, 0.0
+        for pm in POOL_IDS:
+            w = _aehnlich(orig, titel.get(pm, ""))
+            if w > wert:
+                beste, wert = pm, w
+        if beste and wert >= PMID_SCHWELLE:
+            print(f"PMID-Abgleich: {s['pmid']} passt nicht zu '{orig[:70]}' - "
+                  f"ersetzt durch {beste} (Uebereinstimmung {wert:.2f}).")
+            s["pmid"] = beste
+            behalten.append(s)
+        else:
+            print(f"PMID-Abgleich: {s['pmid']} passt nicht zu '{orig[:70]}', "
+                  f"im Pool keine passende Arbeit - Studie herausgenommen.")
+    if len(behalten) < ANZAHL_MIN:
+        raise RuntimeError("Nach dem PMID-Abgleich bleibt zu wenig - nichts geschrieben.")
+    # Doppelte PMIDs nach einer Ersetzung: die erste behalten.
+    gesehen: set[str] = set()
+    eindeutig = [s for s in behalten if not (s["pmid"] in gesehen or gesehen.add(s["pmid"]))]
+    POOLZAHLEN["gewaehlt"] = len(eindeutig)
+    return eindeutig
 
 # Dritte Stufe: Nachkontrolle der deutschen Ausgabe. Gleiche Ausnahme wie in
 # der Abfrage - nennt der Text zugleich Menschen, bleibt die Studie.
@@ -749,7 +840,7 @@ def main() -> int:
         return 0
 
     abstracts = fetch_pubmed()
-    studies = auswahl_pruefen(abstracts)
+    studies = pmid_abgleich(auswahl_pruefen(abstracts))
     meta = fetch_meta([s["pmid"] for s in studies])
     for s in studies:
         s.update(meta.get(s["pmid"], {"author": "", "pubdate": "", "added": "", "_sort": ""}))
