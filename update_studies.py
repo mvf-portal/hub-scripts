@@ -437,6 +437,16 @@ def fetch_meta(pmids: list[str]) -> dict[str, dict]:
     return aus
 
 
+def _studien_im_text(resp) -> bool:
+    """Enthaelt die Antwort mindestens eine Studie? Unlesbares zaehlt als ja -
+    das soll weiter unten an json.loads sichtbar scheitern, nicht hier."""
+    try:
+        text = next(b.text for b in resp.content if b.type == "text")
+        return bool(json.loads(text).get("studies"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def pick_studies(abstracts: str, zusatz: str = "") -> list[dict]:
     client = anthropic.Anthropic()
     # Nur strukturierte Ausgabe erzwingen (kein effort/thinking), damit es auch
@@ -467,6 +477,7 @@ def pick_studies(abstracts: str, zusatz: str = "") -> list[dict]:
     # gekappt wird danach ohnehin auf ANZAHL_SOLL.
     letzter: Exception | None = None
     resp = None
+    leer_wiederholt = False
     for versuch in range(3):
         try:
             resp = client.messages.create(
@@ -482,6 +493,17 @@ def pick_studies(abstracts: str, zusatz: str = "") -> list[dict]:
                 letzter = RuntimeError("Antwort an der Token-Grenze abgeschnitten")
                 print(f"Modellantwort abgeschnitten (stop_reason max_tokens, "
                       f"{resp.usage.output_tokens} Tokens); neuer Versuch ...")
+                resp = None
+                continue
+            # Eine leere Auswahl wird EINMAL neu angefragt. Am 15.10.2026
+            # waehlte das Modell im Impf-Hub aus 43 Kandidaten keine einzige
+            # Studie; der Lauf brach ab, die spaeteren Laeufe mit demselben
+            # Pool fanden welche - aber erst nach 10:00, und der Newsletter
+            # fiel aus. Bleibt auch der zweite Versuch leer, bricht der Lauf
+            # wie bisher unten ab ("Unerwartete Studienanzahl: 0").
+            if not leer_wiederholt and not _studien_im_text(resp):
+                leer_wiederholt = True
+                print("Modell hat keine Studie ausgewählt; einmal neu angefragt ...")
                 resp = None
                 continue
             break
