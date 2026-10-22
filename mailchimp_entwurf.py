@@ -418,6 +418,14 @@ STUFEN = {
     "gutachten": ("Empfohlen", "#8A5608"),
     "diga": ("DiGA aufgenommen", "#0E5A5E"),
     "diga-streichung": ("DiGA gestrichen", "#973030"),
+    # **Die Behoerde gehoert in die Marke.** Seit dem 22.10.2026 liefert der
+    # Radar auch amerikanische Erstzulassungen. Ohne diese beiden Zeilen
+    # fiele eine FDA-Zulassung auf den Standardwert unten zurueck und stuende
+    # im Newsletter als "Zugelassen" in der Hausfarbe - also als
+    # europaeische Zulassung. Das waere der teuerste Fehler dieser Rubrik:
+    # Der Leser schloesse auf Verfuegbarkeit und Erstattung in Deutschland.
+    "fda": ("FDA zugelassen", "#4B3E80"),
+    "fda-wartet": ("FDA zugelassen", "#4B3E80"),
 }
 
 
@@ -481,7 +489,12 @@ def rubriken_html(radar: list[dict], news: list[dict],
 
     zeilen = []
     for e in (zulassungen or []):
-        marke, farbe = STUFEN.get(e.get("stufe", ""), STUFEN["zulassung"])
+        # **Der Rueckfall darf nichts behaupten.** Bis zum 22.10.2026 fiel
+        # eine unbekannte Stufe auf "Zugelassen" zurueck - eine Vermutung, die
+        # sich als Tatsache liest. Kommt eine fuenfte Stufe hinzu und wird
+        # hier vergessen, steht jetzt das neutrale "Neu" da: sichtbar
+        # unfertig, aber nicht falsch.
+        marke, farbe = STUFEN.get(e.get("stufe", ""), ("Neu", "#5A6B7D"))
         datum = ""
         try:
             datum = dt.date.fromisoformat(e["datum"]).strftime("%d.%m.%Y")
@@ -506,10 +519,16 @@ def rubriken_html(radar: list[dict], news: list[dict],
               f'{escape(e.get("satz", ""))}</span></p>')
     teile.append(rubrik_html(
         "Neu zugelassen und empfohlen",
-        "Arzneimittel der Europ&auml;ischen Arzneimittel-Agentur und digitale "
-        "Gesundheitsanwendungen des BfArM. &bdquo;Empfohlen&ldquo; hei&szlig;t: "
-        "Der Ausschuss hat die Zulassung empfohlen, die EU-Kommission hat noch "
-        "nicht entschieden.",
+        # Der Einleitungssatz muss alle Quellen nennen, die in der Rubrik
+        # auftauchen koennen - sonst steht unter einer Ueberschrift, die
+        # &bdquo;der EMA&ldquo; sagt, eine amerikanische Zulassung. Seit dem
+        # 22.10.2026 sind es drei Behoerden.
+        "Arzneimittel der Europ&auml;ischen Arzneimittel-Agentur, Erstzulassungen "
+        "der US-Beh&ouml;rde FDA und digitale Gesundheitsanwendungen des BfArM. "
+        "&bdquo;Empfohlen&ldquo; hei&szlig;t: Der Ausschuss hat die Zulassung "
+        "empfohlen, die EU-Kommission hat noch nicht entschieden. "
+        "&bdquo;FDA zugelassen&ldquo; hei&szlig;t: in den USA zugelassen, "
+        "nicht in der EU.",
         zeilen,
         ("Alle Eintr&auml;ge im Zulassungs-/DiGA-Radar",
          f"https://wissen.m-vf.de/zulassungen.html?{p}")))
