@@ -380,6 +380,47 @@ def radar_eintraege() -> list[dict]:
     return []
 
 
+def zulassung_eintraege() -> list[dict]:
+    """Neue Arzneimittel und DiGA des eigenen Themengebiets.
+
+    Dieselbe Quelle wie die Hinweiskarte auf der Seite - `zulassungen.json`
+    aus dem Versorgungsforschungs-Hub -, damit Newsletter und Hub nicht
+    auseinanderlaufen. Faellt der Abruf aus, entfaellt die Rubrik; sie ist
+    Beiwerk und kein Grund, eine Ausgabe zu verzoegern.
+
+    **Anders als beim Radar wird hier nichts nachgerechnet.** Eine Zulassung
+    laeuft nicht ab; die Liste ist gueltig, bis der naechste Lauf sie
+    fortschreibt.
+    """
+    try:
+        import zulassungen_hinweis
+        daten = zulassungen_hinweis.daten_holen()
+        slug = json.loads(pathlib.Path("portal.json").read_text(
+            encoding="utf-8")).get("SLUG")
+    except Exception as fehler:  # noqa: BLE001 - Beiwerk darf ausfallen
+        print(f"Zulassungs-Rubrik entfaellt: {fehler}")
+        return []
+    meine = [e for e in daten.get("eintraege") or []
+             if slug in (e.get("hubs") or [])]
+    # Schon absteigend sortiert, aber nicht darauf verlassen: Die Datei wird
+    # von einem anderen Skript geschrieben, und eine Annahme ueber fremde
+    # Sortierung ist eine Annahme zu viel.
+    meine.sort(key=lambda e: e.get("datum") or "", reverse=True)
+    return meine[:RUBRIK_MAX]
+
+
+# Wie die vier Stufen im Newsletter heissen. **Die Stufe muss dastehen**:
+# Stuende "empfiehlt die Zulassung" neben "ist zugelassen", hielte der Leser
+# beides fuer dasselbe - und die Empfehlung ist der Vorsprung von zwei
+# Monaten, nicht die Zulassung.
+STUFEN = {
+    "zulassung": ("Zugelassen", "#0051A1"),
+    "gutachten": ("Empfohlen", "#8A5608"),
+    "diga": ("DiGA aufgenommen", "#0E5A5E"),
+    "diga-streichung": ("DiGA gestrichen", "#973030"),
+}
+
+
 def news_eintraege() -> list[dict]:
     """Die Beitraege, die scharf vorher `newsfeed.py` in index.html gesetzt hat.
 
@@ -428,10 +469,50 @@ def rubrik_html(ueberschrift: str, unterzeile: str, zeilen: list[str],
     </td></tr>"""
 
 
-def rubriken_html(radar: list[dict], news: list[dict]) -> str:
-    """Beide Rubriken, soweit sie heute etwas Neues zu sagen haben."""
+def rubriken_html(radar: list[dict], news: list[dict],
+                  zulassungen: list[dict] | None = None) -> str:
+    """Die Rubriken, soweit sie heute etwas Neues zu sagen haben.
+
+    `zulassungen` hat einen Vorgabewert, damit der zweite Aufrufer (die
+    Testausgabe) unveraendert weiterlaeuft.
+    """
     p = "utm_source=newsletter&amp;utm_medium=email&amp;utm_campaign=rubriken"
     teile = []
+
+    zeilen = []
+    for e in (zulassungen or []):
+        marke, farbe = STUFEN.get(e.get("stufe", ""), STUFEN["zulassung"])
+        datum = ""
+        try:
+            datum = dt.date.fromisoformat(e["datum"]).strftime("%d.%m.%Y")
+        except (ValueError, KeyError):
+            pass
+        # Nur Felder, die immer gefuellt sind: stufe, datum, name, satz, url.
+        # `wirkstoff` fehlt bei jeder DiGA, `atc` bei acht von 48 - fest
+        # eingesetzt haette die Rubrik an jedem zweiten Eintrag ein Loch.
+        # Gemessen am 22.10.2026 an der ganzen Datei, nicht am Einzelfall.
+        stoff = e.get("wirkstoff") or ""
+        zeilen.append(
+            f'<p style="margin:0 0 10px;font:14px/1.5 {FONT};color:#333;">'
+            f'<a href="{escape(e.get("url", ""))}" style="color:{BLAU};font-weight:bold;">'
+            f'{escape(e.get("name", ""))}</a>'
+            + (f' <span style="font:12px/1.5 {FONT};color:#545C63;">'
+               f'{escape(stoff)}</span>' if stoff else "")
+            + f'<br><span style="font:12px/1.5 {FONT};color:{farbe};'
+              f'font-weight:bold;">{marke}</span>'
+            + (f'<span style="font:12px/1.5 {FONT};color:#545C63;">'
+               f' &middot; {datum}</span>' if datum else "")
+            + f'<br><span style="font:13px/1.5 {FONT};color:#333;">'
+              f'{escape(e.get("satz", ""))}</span></p>')
+    teile.append(rubrik_html(
+        "Neu zugelassen und empfohlen",
+        "Arzneimittel der Europ&auml;ischen Arzneimittel-Agentur und digitale "
+        "Gesundheitsanwendungen des BfArM. &bdquo;Empfohlen&ldquo; hei&szlig;t: "
+        "Der Ausschuss hat die Zulassung empfohlen, die EU-Kommission hat noch "
+        "nicht entschieden.",
+        zeilen,
+        ("Alle Eintr&auml;ge im Zulassungs-/DiGA-Radar",
+         f"https://wissen.m-vf.de/zulassungen.html?{p}")))
 
     zeilen = []
     for e in radar:
@@ -1091,23 +1172,33 @@ def main() -> int:
     vorher = alte_signaturen()
     radar = radar_eintraege()
     news = news_eintraege()
+    zulassungen = zulassung_eintraege()
     sig_radar = signatur([e["url"] for e in radar])
     sig_news = signatur([e["url"] for e in news])
+    # **Nicht ueber die Adresse.** Alle DiGA zeigen auf dasselbe Verzeichnis;
+    # ueber die Adresse signiert waeren drei neue DiGA dieselbe Rubrik wie
+    # eine. `nummer` ist durchgaengig gefuellt und je Eintrag verschieden.
+    sig_zul = signatur([e.get("nummer", "") for e in zulassungen])
     zeige_radar = bool(radar) and sig_radar != vorher.get("radar")
     zeige_news = bool(news) and sig_news != vorher.get("news")
+    zeige_zul = bool(zulassungen) and sig_zul != vorher.get("zulassungen")
     for name, zeigen, wieviel in (("Ausschreibungen", zeige_radar, len(radar)),
-                                  ("News", zeige_news, len(news))):
+                                  ("News", zeige_news, len(news)),
+                                  ("Zulassungen", zeige_zul, len(zulassungen))):
         print(f"Rubrik {name}: "
               + (f"{wieviel} Eintrag/Eintraege" if zeigen
                  else "unveraendert seit der letzten Ausgabe - entfaellt"))
     rubriken = rubriken_html(radar if zeige_radar else [],
-                             news if zeige_news else [])
+                             news if zeige_news else [],
+                             zulassungen if zeige_zul else [])
     # Fortgeschrieben wird nur, was heute auch wirklich in der Ausgabe stand.
     signaturen = dict(vorher)
     if zeige_radar:
         signaturen["radar"] = sig_radar
     if zeige_news:
         signaturen["news"] = sig_news
+    if zeige_zul:
+        signaturen["zulassungen"] = sig_zul
 
     sauber = newsletter_html(offen, hinweise, rubriken)
     mc.inhalt(kid, sauber)
