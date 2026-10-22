@@ -54,8 +54,32 @@ def daten_holen() -> dict:
         return json.load(r)
 
 
-def block(stand: str, eigene: int, gutachten: int) -> str:
-    """Drei Zahlen, mehr braucht die Karte nicht.
+def zaehlen(eintraege: list[dict]) -> dict:
+    """Je Stufe eine eigene Zahl - **keine Restmenge**.
+
+    Bis zum 22.10.2026 bekam die Karte nur zwei Zahlen: alle und Gutachten.
+    Den Rest rechnete die Seite als `eigene - gutachten` und nannte ihn
+    "Zulassungen". Mit der dritten und vierten Stufe wurde das falsch: Eine
+    DiGA-Aufnahme und eine amerikanische Erstzulassung standen dann in einem
+    deutschen Hub als EU-Zulassung da. Derselbe Fehler, der in der
+    Newsletter-Rubrik im Rueckfall der Stufentabelle steckte.
+
+    Eine Restmenge ist bei Stufen immer die falsche Bauweise: Sie behauptet,
+    alles Unbekannte gehoere in die bekannteste Schublade.
+    """
+    def wie_viele(pruefung) -> int:
+        return sum(1 for e in eintraege if pruefung(str(e.get("stufe", ""))))
+    return {
+        "eigene": len(eintraege),
+        "zulassung": wie_viele(lambda s: s == "zulassung"),
+        "gutachten": wie_viele(lambda s: s == "gutachten"),
+        "fda": wie_viele(lambda s: s.startswith("fda")),
+        "diga": wie_viele(lambda s: s.startswith("diga")),
+    }
+
+
+def block(stand: str, z: dict) -> str:
+    """Die fertigen Zahlen, mehr braucht die Karte nicht.
 
     Anders als beim Ausschreibungsradar steht hier **die fertige Zahl** und
     keine Fristenliste: Eine Zulassung laeuft nicht ab, es gibt im Browser
@@ -65,8 +89,14 @@ def block(stand: str, eigene: int, gutachten: int) -> str:
     return "\n".join([
         START,
         f'const ZUL_STAND = "{stand}";',
-        f"const ZUL_EIGENE = {eigene};",
-        f"const ZUL_GUTACHTEN = {gutachten};",
+        f'const ZUL_EIGENE = {z["eigene"]};',
+        f'const ZUL_GUTACHTEN = {z["gutachten"]};',
+        # Seit dem 22.10.2026. Die Seite liest sie mit `typeof`-Vorbehalt:
+        # Ein Portal, dessen Block noch aus der Zeit davor stammt, faellt
+        # dann auf die alte Darstellung zurueck, statt leer zu bleiben.
+        f'const ZUL_ZULASSUNG = {z["zulassung"]};',
+        f'const ZUL_FDA = {z["fda"]};',
+        f'const ZUL_DIGA = {z["diga"]};',
         ENDE,
     ])
 
@@ -91,13 +121,14 @@ def main() -> int:
         return 0
 
     eintraege = [e for e in daten.get("eintraege", []) if slug in (e.get("hubs") or [])]
-    gutachten = sum(1 for e in eintraege if e.get("stufe") == "gutachten")
+    z = zaehlen(eintraege)
     stand = daten.get("stand", "")
 
-    neu = block(stand, len(eintraege), gutachten)
+    neu = block(stand, z)
     if eintraege:
-        print(f"{slug}: {len(eintraege)} Eintrag/Eintraege "
-              f"({len(eintraege) - gutachten} zugelassen, {gutachten} empfohlen), "
+        print(f"{slug}: {z['eigene']} Eintrag/Eintraege "
+              f"({z['zulassung']} EU-Zulassungen, {z['gutachten']} CHMP-Empfehlungen, "
+              f"{z['fda']} FDA-Zulassungen, {z['diga']} DiGA), "
               f"Stand {stand or '?'}.")
     else:
         # Keine Warnung: Fuer acht der fuenfzehn Hubs ist das der Normalfall.
