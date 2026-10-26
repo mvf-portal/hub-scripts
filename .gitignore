@@ -1,0 +1,14 @@
+# Dieses Repo ist oeffentlich, und die Workflows holen es zur Laufzeit in
+# fuenfzehn Portale. Was beim Messen entsteht, gehoert nicht hinein -
+# siehe die Regel, nie `git add -A` zu benutzen.
+
+__pycache__/
+*.pyc
+
+# Zwischenstaende und Protokolle der Pruefungen (inhalt_pruefen.py).
+# Der Befund ist ein Arbeitsstand, kein Bestandteil des Werkzeugs: Er
+# veraltet mit dem naechsten Lauf, und eine Fundliste, die im Repo liegt
+# und niemand liest, ist genau der Fall, den wir vermeiden wollen.
+inhalt-befund.json
+inhalt-lauf.log
+_probe.html
