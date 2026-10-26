@@ -1029,13 +1029,21 @@ def main() -> int:
         # die mehrtaegige Fassung mit Tagesbalken ansehen.
         drei = tage(alle)[:3]
         studien = [e for e in alle if e["aufgenommen"] in drei][:MAX_STUDIEN]
-        # Die Probe zeigt beide Rubriken immer - ungeachtet der Signaturen.
+        # Die Probe zeigt ALLE Rubriken immer - ungeachtet der Signaturen.
         # Wer die Vorschau aufruft, will sehen, wie die Ausgabe aussieht, wenn
         # es etwas zu melden gibt, nicht ob heute zufaellig etwas neu ist.
+        #
+        # **Die dritte Rubrik fehlte hier bis zum 26.10.2026.** Der Kommentar
+        # sagte "beide Rubriken" und stammte aus der Zeit, als es zwei gab;
+        # beim Bau der Zulassungsrubrik am 22.10. wurde der echte Aufruf
+        # angeschlossen, die Vorschau aber nicht. Sie zeigte also eine
+        # Ausgabe, die es so nicht gibt - der unauffaelligste Fehler einer
+        # Vorschau, denn sie sieht vollstaendig aus.
         html = newsletter_html(studien, stopp_hinweis(
             studien, "https://beispiel.invalid/entwurf",
             ["Beispielbeanstandung - so sieht der Stopp-Fall aus"]),
-            rubriken_html(radar_eintraege(), news_eintraege()))
+            rubriken_html(radar_eintraege(), news_eintraege(),
+                          zulassung_eintraege()))
         with open("_probe.html", "w", encoding="utf-8") as f:
             f.write(html)
         print(f"{len(studien)} Studien aus {len(tage(studien))} Tagen -> _probe.html")
