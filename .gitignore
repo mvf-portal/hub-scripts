@@ -10,5 +10,7 @@ __pycache__/
 # veraltet mit dem naechsten Lauf, und eine Fundliste, die im Repo liegt
 # und niemand liest, ist genau der Fall, den wir vermeiden wollen.
 inhalt-befund.json
-inhalt-lauf.log
+inhalt-einordnung.json
+inhalt-bericht.html
+inhalt-*.log
 _probe.html
