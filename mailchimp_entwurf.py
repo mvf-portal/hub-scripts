@@ -92,6 +92,11 @@ FROM_NAME = "Monitor Versorgungsforschung"
 REPLY_TO = "redaktion@m-vf.de"   # Antworten sollen in der Redaktion landen,
                                 # nicht beim Redaktionssystem. Die Adresse muss in
                                 # Mailchimp als Absender freigegeben sein.
+# Kampagnenordner "Hubs" (seit 30.10.2026, Wunsch von Anke Heiser): Alle Hub-
+# Ausgaben landen dort statt zwischen MVF-Newsletter und eBlasts. Mailchimp nimmt
+# den Ordner nur beim Anlegen an - eine verschickte Kampagne laesst sich ueber
+# die API nicht mehr verschieben (PATCH antwortet 200 und aendert nichts).
+ORDNER_HUBS = "fc54b16261"
 # Empfaenger der einzigen E-Mail, die dieses Skript noch verschickt: der
 # Testausgabe im Stopp-Fall. Im Regelfall meldet der Sammelbericht.
 SEITE = f"https://{DOMAIN}"   # DOMAIN kommt seit dem 04.09.2026 aus
@@ -821,10 +826,20 @@ class Mailchimp:
                            "segment_opts": {"match": "any", "conditions": bedingungen}},
             "settings": {"subject_line": betreff, "title": titel,
                          "from_name": FROM_NAME, "reply_to": REPLY_TO,
-                         "to_name": "*|FNAME|*", "auto_footer": False},
+                         "to_name": "*|FNAME|*", "auto_footer": False,
+                         "folder_id": ORDNER_HUBS},
         }
         try:
-            return self._ruf("POST", "/campaigns", json=rumpf)
+            try:
+                return self._ruf("POST", "/campaigns", json=rumpf)
+            except SystemExit as fehler:
+                # Der Ordner ist Ordnung, kein Versandgrund: Gibt es ihn nicht
+                # mehr, wird die Ausgabe ohne Ordner angelegt statt gar nicht.
+                if "folder" not in str(fehler).lower():
+                    raise
+                print(f"Ordner {ORDNER_HUBS} abgelehnt ({fehler}) - Kampagne ohne Ordner.")
+                del rumpf["settings"]["folder_id"]
+                return self._ruf("POST", "/campaigns", json=rumpf)
         except SystemExit as fehler:
             # Lieber an die Tag-Traeger allein als gar nicht: Wird die
             # Gruppenbedingung abgelehnt, faellt der Empfaenger auf den Tag
