@@ -13,6 +13,7 @@ HTML ab:
     studie/index.html          Uebersicht nach Aufnahmemonat
     sitemap.xml                alle Seiten des Hubs
     robots.txt                 alles frei, Verweis auf die Sitemap
+    llms.txt                   Wegweiser fuer KI-Dienste (seit 12.11.2026)
 
 Liest nur portal.json und studien-archiv.json - kein Netz, kein Schluessel.
 Aufruf im Wurzelverzeichnis eines Portals:
@@ -28,7 +29,7 @@ denselben Wortlaut wie die Startseite ("Von KI ausgewaehlt und
 zusammengefasst", festgelegt vom Herausgeber am 24.10.2026). Wer ihn aendert,
 aendert ihn auf allen drei Seiten mit.
 
-**Fremde Dateien bleiben unangetastet:** sitemap.xml und robots.txt werden nur
+**Fremde Dateien bleiben unangetastet:** sitemap.xml, robots.txt und llms.txt werden nur
 geschrieben, wenn es sie noch nicht gibt oder wenn sie die Kennzeile dieses
 Skripts tragen. Eine von Hand gepflegte Datei (wie beim Innovationsfonds-Radar)
 fuehrt zu einer Warnung, nicht zum Ueberschreiben.
@@ -303,6 +304,36 @@ def robots(home):
             f"Sitemap: {home}sitemap.xml\n")
 
 
+def llms(studien, portal, home):
+    """Wegweiser fuer KI-Dienste nach llmstxt.org. Zahl und Stand kommen aus
+    dem Archiv, nicht aus der Uhr - aendert sich also nur mit neuen Studien."""
+    neuester = max((s.get("aufgenommen") or "" for s in studien), default="")
+    stand = f", zuletzt aufgenommen am {neuester[8:10]}.{neuester[5:7]}.{neuester[:4]}" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", neuester) else ""
+    return f"""# {portal['TITEL']}
+
+> {portal['META_BESCHREIBUNG']}
+
+<!-- {KENNZEILE} -->
+
+Hinweise zur Nutzung:
+- Der Hub zeigt täglich neue Studien aus PubMed zum Thema {portal['THEMA']}, mit deutscher Zusammenfassung und einer Einschätzung, ob sich die Ergebnisse auf Deutschland übertragen lassen. Bisher {len(studien)} Studien{stand}.
+- Auswahl und deutsche Zusammenfassung stammen von einer KI, ohne redaktionelle Prüfung (Kennzeichnung „{KI_KENNZEICHEN}“). Maßgeblich ist immer die Originalpublikation.
+- Bitte bei Zitaten die Originalstudie über https://pubmed.ncbi.nlm.nih.gov/<pmid>/ angeben und die deutsche Zusammenfassung als Quelle „MVF-Knowledge-Hub {portal['THEMA']}“ nennen.
+
+## Studien
+
+- [Alle Studien]({home}studie/): Übersicht nach Aufnahmemonat, je Studie eine eigene Seite unter {home}studie/<pmid>/
+- [Studienarchiv (JSON)]({home}studien-archiv.json): alle Studien; Felder pmid, title, sum (Zusammenfassung), result (Ergebnis), transfer (Übertragbarkeit), journal, author, year, pubdate, aufgenommen
+- [Studien-Feed (RSS)]({home}studien-feed.xml): die neuesten Studien
+
+## Mehr
+
+- [Startseite des Hubs]({home}): Live-Suche über die wichtigen Fachdatenbanken des Themas
+- [Alle Knowledge-Hubs]({HUBS}): Übersicht und llms.txt für alle Hubs
+- [Monitor Versorgungsforschung]({MVF_URL}): Herausgeber, Fachzeitschrift für Versorgungsforschung
+"""
+
+
 # -------------------------------------------------------------------- Lauf --
 
 def main():
@@ -331,7 +362,8 @@ def main():
                 shutil.rmtree(alt)
                 entfernt += 1
 
-    for name, inhalt in (("sitemap.xml", sitemap(studien, wurzel, home)), ("robots.txt", robots(home))):
+    for name, inhalt in (("sitemap.xml", sitemap(studien, wurzel, home)), ("robots.txt", robots(home)),
+                         ("llms.txt", llms(studien, portal, home))):
         if eigene_datei(wurzel / name):
             geaendert += schreiben(wurzel / name, inhalt)
         else:
