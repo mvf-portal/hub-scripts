@@ -144,8 +144,8 @@ MAX_STUDIEN = 25
 # sondern wegen der Frequenz. Seit dem 13.11.2026 gibt es deshalb drei Spuren:
 # taeglich wie bisher, woechentlich freitags, monatlich am ersten Werktag.
 #
-# **Was eine Spur ist und was nicht.** Eine Spur ist nichts weiter als ein
-# eigener Kampagnen-Praefix plus eine eigene Mailchimp-Gruppe. Der ganze
+# **Was eine Spur ist und was nicht.** Eine Spur ist ein eigener
+# Kampagnen-Praefix plus eine Bedingung auf EINE gemeinsame Gruppenmenge. Der ganze
 # uebrige Apparat - Auswahl des Offenen, Torwaechter, Terminierung,
 # Statusdatei - bleibt unveraendert, und das ist der Trick: `datum_aus_titel()`
 # erkennt eine Kampagne an ihrem Praefix, also fuehrt JEDE Spur ihren eigenen
@@ -162,33 +162,56 @@ MAX_STUDIEN = 25
 #
 # **Der Tag bleibt der Tagesspur vorbehalten.** TAG_ID ist ein statisches
 # Segment ohne Frequenzangabe; wer den Tag traegt, bekaeme sonst alle drei
-# Spuren. Woche und Monat adressieren ausschliesslich ueber ihre Gruppe.
+# Spuren. Woche und Monat adressieren ausschliesslich ueber die Gruppen.
+#
+# **Warum EINE Frequenzmenge und nicht drei Gruppen je Hub.** Der erste
+# Entwurf vom 13.11.2026 gab jedem Hub zwei zusaetzliche Gruppen. Beim
+# Anlegen der vierzigsten kam Mailchimps Antwort: "Cannot have more than 60
+# interests per list (across all categories)" - eine harte Grenze ueber ALLE
+# Gruppenmengen der Liste hinweg. Mit zwanzig Hub-Gruppen, den redaktionellen
+# Newslettern und vierzig Spur-Gruppen war das Kontingent voll, und es
+# haette sich kein einziger Hub mehr anlegen lassen. Die 34 bereits
+# angelegten Gruppen sind am selben Tag wieder entfernt worden.
+#
+# Stattdessen gibt es EINE Gruppenmenge "Wie oft sollen die Studien kommen"
+# mit drei Gruppen - drei statt vierzig. Der Versand verknuepft sie mit der
+# Hub-Gruppe: Hub UND Frequenz.
+#
+# **Der Preis:** Die Frequenz gilt fuer alle Hubs eines Menschen gleich. Wer
+# drei Hubs bezieht, bekommt alle drei taeglich oder alle drei monatlich,
+# nicht den einen so und den anderen anders. Fuer den Zweck - nicht jeder
+# will jeden Tag Post - reicht das, und es ist die einzige Form, die in das
+# Kontingent passt.
+#
+# **Wer nichts gewaehlt hat, bleibt auf der Tagesspur.** Die Tagesspur
+# adressiert "Hub-Gruppe UND NICHT (woechentlich ODER monatlich)". Sonst
+# verloere jeder heutige Abonnent seinen Newsletter in dem Augenblick, in dem
+# die Frequenzmenge entsteht.
 SPUREN = {
     "tag": {
         "praefix": None,          # MC_PRAEFIX unveraendert
-        "gruppe": None,           # MC_GRUPPE_NAME unveraendert
+        "frequenz": None,         # alles ausser Woche und Monat
         "max": MAX_STUDIEN,
         "tag_erlaubt": True,      # darf zusaetzlich ueber TAG_ID adressieren
         "wann": "werktags",
-        "was": "die Studien seit der letzten Ausgabe",
     },
     "woche": {
         "praefix": ("-Newsletter", "-Wochenausgabe"),
-        "gruppe": " woechentlich",
+        "frequenz": "Einmal die Woche, freitags",
         "max": 40,
         "tag_erlaubt": False,
         "wann": "freitags",
-        "was": "die Studien der Woche",
     },
     "monat": {
         "praefix": ("-Newsletter", "-Monatsausgabe"),
-        "gruppe": " monatlich",
+        "frequenz": "Einmal im Monat",
         "max": 60,
         "tag_erlaubt": False,
         "wann": "erster Werktag im Monat",
-        "was": "die Studien des Monats",
     },
 }
+# Die Gruppenmenge, in der die Frequenz steht. Typ "radio": genau eine Wahl.
+FREQUENZ_MENGE = "Wie oft sollen die Studien kommen"
 SPUR = "tag"
 
 
@@ -216,8 +239,6 @@ def spur_setzen(name: str) -> None:
         if PRAEFIX.startswith(MC_PRAEFIX) or MC_PRAEFIX.startswith(PRAEFIX):
             raise SystemExit(
                 f"'{PRAEFIX}' und '{MC_PRAEFIX}' beginnen gleich - siehe oben.")
-    if s["gruppe"]:
-        GRUPPE_NAME = MC_GRUPPE_NAME + s["gruppe"]
     MAX_STUDIEN = s["max"]
     if not s["tag_erlaubt"]:
         TAG_ID = 0
@@ -226,8 +247,10 @@ def spur_setzen(name: str) -> None:
     # diesen Hub die Wochenausgabe als Tagesversand.
     global STATUSDATEI
     STATUSDATEI = f"versand-status-{name}.json"
-    print(f"Spur '{name}': Praefix '{PRAEFIX}', Gruppe '{GRUPPE_NAME}', "
-          f"hoechstens {MAX_STUDIEN} Studien.")
+    print(f"Spur '{name}': Praefix '{PRAEFIX}', Gruppe '{GRUPPE_NAME}'"
+          + (f" UND Frequenz '{s['frequenz']}'" if s["frequenz"]
+             else " OHNE Woche und Monat")
+          + f", hoechstens {MAX_STUDIEN} Studien.")
 
 
 def spur_faellig(spur: str, heute: dt.date) -> tuple[bool, str]:
@@ -911,6 +934,22 @@ class Mailchimp:
             print(f"Gruppe '{name}' nicht ermittelbar ({fehler}) - nur ueber den Tag.")
         return None
 
+    def frequenz_kategorie(self) -> tuple[str, dict[str, str]] | None:
+        """Kennung der Frequenzmenge und {Gruppenname: Kennung} - oder None."""
+        try:
+            kats = self._ruf("GET", f"/lists/{LIST_ID}/interest-categories",
+                             params={"count": 60}).get("categories", [])
+            for k in kats:
+                if k.get("title", "").strip() != FREQUENZ_MENGE:
+                    continue
+                ints = self._ruf(
+                    "GET", f"/lists/{LIST_ID}/interest-categories/{k['id']}/interests",
+                    params={"count": 60}).get("interests", [])
+                return k["id"], {i["name"].strip(): i["id"] for i in ints}
+        except SystemExit as fehler:
+            print(f"Frequenzmenge nicht ermittelbar ({fehler}).")
+        return None
+
     def anlegen(self, titel: str, betreff: str) -> dict:
         # Empfaenger: Tag ODER Gruppe. "any" ist hier wesentlich - mit "all"
         # bekaeme die Ausgabe nur, wer zufaellig beide Kennzeichen traegt.
@@ -936,10 +975,52 @@ class Mailchimp:
                 f"'{GRUPPE_NAME}' wurde in Mailchimp nicht gefunden. Bitte die "
                 f"Tag-Nummer in scripts/mailchimp_entwurf.py eintragen.")
 
+        # --- Frequenz (seit 13.11.2026) -------------------------------
+        # Bis hierher sind die Bedingungen mit "any" verknuepft: Tag ODER
+        # Gruppe. Die Frequenz muss aber UND sein, sonst bekaeme jeder
+        # Frequenz-Waehler jede Spur. Mailchimp kann in einem Segment nur EIN
+        # match fuehren, also wird aus "Tag oder Gruppe" ein vorab gefiltertes
+        # "alles muss zutreffen", sobald eine Frequenzbedingung dazukommt -
+        # und die Tagesspur verliert dabei den Tag, weil sich "Tag ODER
+        # Gruppe UND nicht-woechentlich" nicht in einem Segment ausdruecken
+        # laesst. Das ist vertretbar: Der Tag ist seit dem 01.09.2026 ohnehin
+        # nur noch der Rueckfall fuer Eintraege ohne Gruppe.
+        verknuepfung = "any"
+        freq = SPUREN[SPUR]["frequenz"]
+        freq_kat = self.frequenz_kategorie()
+        if freq_kat and gruppe:
+            kat_f, alle_f = freq_kat
+            verknuepfung = "all"
+            bedingungen = [b for b in bedingungen
+                           if b["condition_type"] != "StaticSegment"]
+            if freq:
+                ja = [i for n, i in alle_f.items() if n == freq]
+                if not ja:
+                    raise SystemExit(f"Frequenzgruppe '{freq}' nicht gefunden.")
+                bedingungen.append({"condition_type": "Interests",
+                                    "field": f"interests-{kat_f}",
+                                    "op": "interestcontains", "value": ja})
+                print(f"   und Frequenz '{freq}'.")
+            else:
+                # Tagesspur: alles, was NICHT Woche oder Monat gewaehlt hat.
+                # So behaelt jeder heutige Abonnent seinen Newsletter.
+                nein = [i for n, i in alle_f.items()
+                        if n in (SPUREN["woche"]["frequenz"], SPUREN["monat"]["frequenz"])]
+                if nein:
+                    bedingungen.append({"condition_type": "Interests",
+                                        "field": f"interests-{kat_f}",
+                                        "op": "interestcontainsnone", "value": nein})
+                    print("   und NICHT woechentlich oder monatlich.")
+        elif freq:
+            raise SystemExit(
+                f"Spur '{SPUR}' braucht die Gruppenmenge '{FREQUENZ_MENGE}', "
+                f"sie wurde in Mailchimp nicht gefunden.")
+
         rumpf = {
             "type": "regular",
             "recipients": {"list_id": LIST_ID,
-                           "segment_opts": {"match": "any", "conditions": bedingungen}},
+                           "segment_opts": {"match": verknuepfung,
+                                            "conditions": bedingungen}},
             "settings": {"subject_line": betreff, "title": titel,
                          "from_name": FROM_NAME, "reply_to": REPLY_TO,
                          "to_name": "*|FNAME|*", "auto_footer": False,
