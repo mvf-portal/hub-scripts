@@ -214,6 +214,14 @@ SPUREN = {
 # Die Gruppenmenge, in der die Frequenz steht. Typ "radio": genau eine Wahl.
 FREQUENZ_MENGE = "Wie oft sollen die Studien kommen"
 SPUR = "tag"
+# Ob --spur ueberhaupt gegeben wurde. OHNE den Schalter darf sich am Versand
+# NICHTS aendern - das war die Zusage beim Bau der Spuren am 13.11.2026, und
+# sie ist am selben Nachmittag gebrochen worden: Die Frequenzbedingung lief
+# auch ohne --spur mit, Mailchimp wies das Segment ab ("conditions.1.
+# condition_type ... should match one item from enum"), und der
+# Newsletter-Schritt scheiterte in jedem Hub. Aufgefallen am Augenhub um
+# 13:39 UTC, zwei Stunden nach dem Einspielen.
+SPUR_GESETZT = False
 
 
 def spur_setzen(name: str) -> None:
@@ -222,10 +230,11 @@ def spur_setzen(name: str) -> None:
     Wird NUR von main() aufgerufen, und ohne --spur gar nicht: Ein Lauf ohne
     Schalter verhaelt sich Byte fuer Byte wie vor dem 13.11.2026.
     """
-    global SPUR, PRAEFIX, GRUPPE_NAME, MAX_STUDIEN, TAG_ID, STATUSDATEI
+    global SPUR, SPUR_GESETZT, PRAEFIX, GRUPPE_NAME, MAX_STUDIEN, TAG_ID, STATUSDATEI
     if name not in SPUREN:
         raise SystemExit(f"Unbekannte Spur '{name}'. Bekannt: {', '.join(SPUREN)}")
     SPUR = name
+    SPUR_GESETZT = True
     s = SPUREN[name]
     if s["praefix"]:
         alt, neu_ = s["praefix"]
@@ -988,7 +997,9 @@ class Mailchimp:
         # nur noch der Rueckfall fuer Eintraege ohne Gruppe.
         verknuepfung = "any"
         freq = SPUREN[SPUR]["frequenz"]
-        freq_kat = self.frequenz_kategorie()
+        # OHNE --spur bleibt der Versand, wie er vor dem 13.11.2026 war: Tag
+        # ODER Gruppe, keine Frequenzbedingung, kein zusaetzlicher Abruf.
+        freq_kat = self.frequenz_kategorie() if SPUR_GESETZT else None
         if freq_kat and gruppe:
             kat_f, alle_f = freq_kat
             verknuepfung = "all"
