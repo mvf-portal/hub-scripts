@@ -72,6 +72,7 @@ from thema import ANZAHL_SOLL                    # fuer den Hinweis an duennen T
 # kommen seit dem 04.09.2026 zur Laufzeit aus portal.json, nicht mehr
 # als Platzhalter beim Erzeugen des Portals. Erst dadurch laesst sich
 # diese Datei gemeinsam nutzen.
+import portalwerte
 from portalwerte import (DATEI_PRAEFIX, DOMAIN, MC_GRUPPE_NAME, MC_PRAEFIX, MC_TAG_ID,
                          REPO, THEMA_ASCII, TITEL)
 
@@ -135,6 +136,145 @@ PRAEFIX = MC_PRAEFIX
 # Obergrenze, falls laenger nicht freigegeben wurde. Eine Ausgabe mit 80
 # Studien liest niemand; der Rest bleibt im Archiv und im Hub sichtbar.
 MAX_STUDIEN = 25
+
+# =========================================================================
+# Die drei Spuren (seit 13.11.2026)
+# =========================================================================
+# Zwanzig Hubs heissen fuer jemanden mit drei Interessen drei E-Mails am Tag.
+# Das ist die Menge, bei der Leute abbestellen - nicht wegen des Inhalts,
+# sondern wegen der Frequenz. Seit dem 13.11.2026 gibt es deshalb drei Spuren:
+# taeglich wie bisher, woechentlich freitags, monatlich am ersten Werktag.
+#
+# **Was eine Spur ist und was nicht.** Eine Spur ist ein eigener
+# Kampagnen-Praefix plus eine Bedingung auf EINE gemeinsame Gruppenmenge. Der ganze
+# uebrige Apparat - Auswahl des Offenen, Torwaechter, Terminierung,
+# Statusdatei - bleibt unveraendert, und das ist der Trick: `datum_aus_titel()`
+# erkennt eine Kampagne an ihrem Praefix, also fuehrt JEDE Spur ihren eigenen
+# Stand. Die Wochenausgabe bekommt damit von selbst genau das, was seit der
+# letzten Wochenausgabe dazugekommen ist. Es braucht keinen zweiten
+# Versandstatus und keine Sonderlogik ueber das Archiv.
+#
+# **Der Praefix muss sich unterscheiden, und zwar am Anfang.**
+# `datum_aus_titel()` prueft mit startswith(). Ein Wochenpraefix, der mit dem
+# Tagespraefix beginnt, liesse die Tagesspur Wochenausgaben fuer ihre eigenen
+# halten - derselbe Fehler, der am 17.08.2026 zwischen zwei Portalen passiert
+# ist. Deshalb wird "-Newsletter" ersetzt, nicht ergaenzt, und spur_setzen()
+# bricht ab, wenn das nicht greift.
+#
+# **Der Tag bleibt der Tagesspur vorbehalten.** TAG_ID ist ein statisches
+# Segment ohne Frequenzangabe; wer den Tag traegt, bekaeme sonst alle drei
+# Spuren. Woche und Monat adressieren ausschliesslich ueber die Gruppen.
+#
+# **Warum EINE Frequenzmenge und nicht drei Gruppen je Hub.** Der erste
+# Entwurf vom 13.11.2026 gab jedem Hub zwei zusaetzliche Gruppen. Beim
+# Anlegen der vierzigsten kam Mailchimps Antwort: "Cannot have more than 60
+# interests per list (across all categories)" - eine harte Grenze ueber ALLE
+# Gruppenmengen der Liste hinweg. Mit zwanzig Hub-Gruppen, den redaktionellen
+# Newslettern und vierzig Spur-Gruppen war das Kontingent voll, und es
+# haette sich kein einziger Hub mehr anlegen lassen. Die 34 bereits
+# angelegten Gruppen sind am selben Tag wieder entfernt worden.
+#
+# Stattdessen gibt es EINE Gruppenmenge "Wie oft sollen die Studien kommen"
+# mit drei Gruppen - drei statt vierzig. Der Versand verknuepft sie mit der
+# Hub-Gruppe: Hub UND Frequenz.
+#
+# **Der Preis:** Die Frequenz gilt fuer alle Hubs eines Menschen gleich. Wer
+# drei Hubs bezieht, bekommt alle drei taeglich oder alle drei monatlich,
+# nicht den einen so und den anderen anders. Fuer den Zweck - nicht jeder
+# will jeden Tag Post - reicht das, und es ist die einzige Form, die in das
+# Kontingent passt.
+#
+# **Wer nichts gewaehlt hat, bleibt auf der Tagesspur.** Die Tagesspur
+# adressiert "Hub-Gruppe UND NICHT (woechentlich ODER monatlich)". Sonst
+# verloere jeder heutige Abonnent seinen Newsletter in dem Augenblick, in dem
+# die Frequenzmenge entsteht.
+SPUREN = {
+    "tag": {
+        "praefix": None,          # MC_PRAEFIX unveraendert
+        "frequenz": None,         # alles ausser Woche und Monat
+        "max": MAX_STUDIEN,
+        "tag_erlaubt": True,      # darf zusaetzlich ueber TAG_ID adressieren
+        "wann": "werktags",
+    },
+    "woche": {
+        "praefix": ("-Newsletter", "-Wochenausgabe"),
+        "frequenz": "Einmal die Woche, freitags",
+        "max": 40,
+        "tag_erlaubt": False,
+        "wann": "freitags",
+    },
+    "monat": {
+        "praefix": ("-Newsletter", "-Monatsausgabe"),
+        "frequenz": "Einmal im Monat",
+        "max": 60,
+        "tag_erlaubt": False,
+        "wann": "erster Werktag im Monat",
+    },
+}
+# Die Gruppenmenge, in der die Frequenz steht. Typ "radio": genau eine Wahl.
+FREQUENZ_MENGE = "Wie oft sollen die Studien kommen"
+SPUR = "tag"
+
+
+def spur_setzen(name: str) -> None:
+    """Schaltet Praefix, Gruppe und Obergrenze auf eine der drei Spuren.
+
+    Wird NUR von main() aufgerufen, und ohne --spur gar nicht: Ein Lauf ohne
+    Schalter verhaelt sich Byte fuer Byte wie vor dem 13.11.2026.
+    """
+    global SPUR, PRAEFIX, GRUPPE_NAME, MAX_STUDIEN, TAG_ID, STATUSDATEI
+    if name not in SPUREN:
+        raise SystemExit(f"Unbekannte Spur '{name}'. Bekannt: {', '.join(SPUREN)}")
+    SPUR = name
+    s = SPUREN[name]
+    if s["praefix"]:
+        alt, neu_ = s["praefix"]
+        if alt not in MC_PRAEFIX:
+            raise SystemExit(
+                f"Der Praefix dieses Portals ('{MC_PRAEFIX}') enthaelt '{alt}' "
+                f"nicht, der Spur-Praefix liesse sich nur anhaengen - und ein "
+                f"angehaengter Praefix beginnt mit dem Tagespraefix. Die "
+                f"Tagesspur wuerde die Ausgaben dieser Spur fuer ihre eigenen "
+                f"halten. Bitte mc_praefix in portal.json anpassen.")
+        PRAEFIX = MC_PRAEFIX.replace(alt, neu_)
+        if PRAEFIX.startswith(MC_PRAEFIX) or MC_PRAEFIX.startswith(PRAEFIX):
+            raise SystemExit(
+                f"'{PRAEFIX}' und '{MC_PRAEFIX}' beginnen gleich - siehe oben.")
+    MAX_STUDIEN = s["max"]
+    if not s["tag_erlaubt"]:
+        TAG_ID = 0
+    # Eigene Statusdatei je Spur. Ohne sie ueberschriebe die Freitagsausgabe
+    # den Tagesbericht, und der Sammelbericht ueber alle Hubs meldete fuer
+    # diesen Hub die Wochenausgabe als Tagesversand.
+    global STATUSDATEI
+    STATUSDATEI = f"versand-status-{name}.json"
+    print(f"Spur '{name}': Praefix '{PRAEFIX}', Gruppe '{GRUPPE_NAME}'"
+          + (f" UND Frequenz '{s['frequenz']}'" if s["frequenz"]
+             else " OHNE Woche und Monat")
+          + f", hoechstens {MAX_STUDIEN} Studien.")
+
+
+def spur_faellig(spur: str, heute: dt.date) -> tuple[bool, str]:
+    """Ist diese Spur heute dran? Gibt (ja/nein, Begruendung) zurueck."""
+    if spur == "tag":
+        if WOCHENENDE_AUS and heute.weekday() >= 5:
+            return False, "Samstag" if heute.weekday() == 5 else "Sonntag"
+        return True, ""
+    if spur == "woche":
+        # Freitag. Faellt er aus, laeuft die Ausgabe am naechsten Lauf mit -
+        # die Auswahl haengt am letzten Versand, nicht am Kalender.
+        return heute.weekday() == 4, "nicht Freitag"
+    if spur == "monat":
+        # Erster Werktag des Monats: der erste Tag, dessen Vorgaenger alle
+        # entweder im Vormonat liegen oder Wochenende sind.
+        if heute.weekday() >= 5:
+            return False, "Wochenende"
+        erster = heute.replace(day=1)
+        while erster.weekday() >= 5:
+            erster += dt.timedelta(days=1)
+        return heute == erster, f"nicht der erste Werktag (das waere der {erster})"
+    return False, "unbekannte Spur"
+
 # Tagesbericht fuer den Sammelbericht ueber alle Hubs.
 STATUSDATEI = "versand-status.json"
 
@@ -795,6 +935,22 @@ class Mailchimp:
             print(f"Gruppe '{name}' nicht ermittelbar ({fehler}) - nur ueber den Tag.")
         return None
 
+    def frequenz_kategorie(self) -> tuple[str, dict[str, str]] | None:
+        """Kennung der Frequenzmenge und {Gruppenname: Kennung} - oder None."""
+        try:
+            kats = self._ruf("GET", f"/lists/{LIST_ID}/interest-categories",
+                             params={"count": 60}).get("categories", [])
+            for k in kats:
+                if k.get("title", "").strip() != FREQUENZ_MENGE:
+                    continue
+                ints = self._ruf(
+                    "GET", f"/lists/{LIST_ID}/interest-categories/{k['id']}/interests",
+                    params={"count": 60}).get("interests", [])
+                return k["id"], {i["name"].strip(): i["id"] for i in ints}
+        except SystemExit as fehler:
+            print(f"Frequenzmenge nicht ermittelbar ({fehler}).")
+        return None
+
     def anlegen(self, titel: str, betreff: str) -> dict:
         # Empfaenger: Tag ODER Gruppe. "any" ist hier wesentlich - mit "all"
         # bekaeme die Ausgabe nur, wer zufaellig beide Kennzeichen traegt.
@@ -820,10 +976,52 @@ class Mailchimp:
                 f"'{GRUPPE_NAME}' wurde in Mailchimp nicht gefunden. Bitte die "
                 f"Tag-Nummer in scripts/mailchimp_entwurf.py eintragen.")
 
+        # --- Frequenz (seit 13.11.2026) -------------------------------
+        # Bis hierher sind die Bedingungen mit "any" verknuepft: Tag ODER
+        # Gruppe. Die Frequenz muss aber UND sein, sonst bekaeme jeder
+        # Frequenz-Waehler jede Spur. Mailchimp kann in einem Segment nur EIN
+        # match fuehren, also wird aus "Tag oder Gruppe" ein vorab gefiltertes
+        # "alles muss zutreffen", sobald eine Frequenzbedingung dazukommt -
+        # und die Tagesspur verliert dabei den Tag, weil sich "Tag ODER
+        # Gruppe UND nicht-woechentlich" nicht in einem Segment ausdruecken
+        # laesst. Das ist vertretbar: Der Tag ist seit dem 01.09.2026 ohnehin
+        # nur noch der Rueckfall fuer Eintraege ohne Gruppe.
+        verknuepfung = "any"
+        freq = SPUREN[SPUR]["frequenz"]
+        freq_kat = self.frequenz_kategorie()
+        if freq_kat and gruppe:
+            kat_f, alle_f = freq_kat
+            verknuepfung = "all"
+            bedingungen = [b for b in bedingungen
+                           if b["condition_type"] != "StaticSegment"]
+            if freq:
+                ja = [i for n, i in alle_f.items() if n == freq]
+                if not ja:
+                    raise SystemExit(f"Frequenzgruppe '{freq}' nicht gefunden.")
+                bedingungen.append({"condition_type": "Interests",
+                                    "field": f"interests-{kat_f}",
+                                    "op": "interestcontains", "value": ja})
+                print(f"   und Frequenz '{freq}'.")
+            else:
+                # Tagesspur: alles, was NICHT Woche oder Monat gewaehlt hat.
+                # So behaelt jeder heutige Abonnent seinen Newsletter.
+                nein = [i for n, i in alle_f.items()
+                        if n in (SPUREN["woche"]["frequenz"], SPUREN["monat"]["frequenz"])]
+                if nein:
+                    bedingungen.append({"condition_type": "Interests",
+                                        "field": f"interests-{kat_f}",
+                                        "op": "interestcontainsnone", "value": nein})
+                    print("   und NICHT woechentlich oder monatlich.")
+        elif freq:
+            raise SystemExit(
+                f"Spur '{SPUR}' braucht die Gruppenmenge '{FREQUENZ_MENGE}', "
+                f"sie wurde in Mailchimp nicht gefunden.")
+
         rumpf = {
             "type": "regular",
             "recipients": {"list_id": LIST_ID,
-                           "segment_opts": {"match": "any", "conditions": bedingungen}},
+                           "segment_opts": {"match": verknuepfung,
+                                            "conditions": bedingungen}},
             "settings": {"subject_line": betreff, "title": titel,
                          "from_name": FROM_NAME, "reply_to": REPLY_TO,
                          "to_name": "*|FNAME|*", "auto_footer": False,
@@ -1024,6 +1222,10 @@ def datum_aus_titel(titel: str) -> str | None:
 
 
 def main() -> int:
+    # --spur muss VOR allem anderen ausgewertet werden: spur_setzen() aendert
+    # PRAEFIX und GRUPPE_NAME, und datum_aus_titel() liest PRAEFIX.
+    if "--spur" in sys.argv:
+        spur_setzen(sys.argv[sys.argv.index("--spur") + 1])
     probe = "--probe" in sys.argv
     neu = "--neu" in sys.argv
     # Nur zusammen mit --neu und nur von Hand: hebt den Termin einer bereits
@@ -1064,7 +1266,9 @@ def main() -> int:
         print(f"{len(studien)} Studien aus {len(tage(studien))} Tagen -> _probe.html")
         return 0
 
-    key = os.environ.get("MAILCHIMP_API_KEY", "").strip()
+    # schluessel() statt os.environ: entfernt BOM und geschuetzte
+    # Leerzeichen, an denen der Augenhub am 13.11.2026 gescheitert ist.
+    key = portalwerte.schluessel("MAILCHIMP_API_KEY")
     if not key:
         print("MAILCHIMP_API_KEY nicht gesetzt - kein Entwurf angelegt.")
         return 0
@@ -1087,11 +1291,13 @@ def main() -> int:
         print(f"Nichts offen - zuletzt versendet wurde der Stand vom {seit}.")
         return 0
 
-    if WOCHENENDE_AUS and dt.date.fromisoformat(heute).weekday() >= 5:
-        # Kein Entwurf, keine Terminierung - die offenen Studien laufen am
-        # Montag mit. Die Seite selbst ist da laengst aktualisiert.
-        tag = "Samstag" if dt.date.fromisoformat(heute).weekday() == 5 else "Sonntag"
-        print(f"{tag}: kein Versand. {len(offen)} offene Studien warten auf Montag.")
+    faellig, grund = spur_faellig(SPUR, dt.date.fromisoformat(heute))
+    if not faellig:
+        # Kein Entwurf, keine Terminierung - die offenen Studien laufen beim
+        # naechsten faelligen Lauf dieser Spur mit. Die Seite selbst ist
+        # laengst aktualisiert.
+        print(f"{grund}: kein Versand auf der Spur '{SPUR}'. "
+              f"{len(offen)} offene Studien warten.")
         return 0
 
     entwuerfe = [(k, datum_aus_titel(k.get("settings", {}).get("title", "")))

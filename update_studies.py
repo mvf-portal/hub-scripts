@@ -41,7 +41,12 @@ from thema import (ANZAHL_MAX, ANZAHL_MIN, ANZAHL_SOLL, EUROPA_ZUERST, KAPPEN,
 # "APIConnectionError: Connection error" - also als Netzproblem, das keines ist.
 # Beim Longevity-Portal hat das am 18.08.2026 zwei Laeufe gekostet. Deshalb hier
 # einmal abschneiden, statt den Fehler spaeter im Secret zu suchen.
-_schluessel = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+# schluessel() statt os.environ: entfernt BOM und geschuetzte
+# Leerzeichen. Ein Anthropic-Schluessel geht genauso als HTTP-Header
+# hinaus wie der von Mailchimp und bricht an derselben Stelle.
+import portalwerte
+
+_schluessel = portalwerte.schluessel("ANTHROPIC_API_KEY")
 if _schluessel:
     os.environ["ANTHROPIC_API_KEY"] = _schluessel
 
@@ -210,6 +215,15 @@ TIER_AUSSCHLUSS = (
 # fenstern ergaebe eine andere, nie dagewesene Auswahl.
 NACHTRAG_TAG: str | None = None
 
+# Wie viele Studien diesem Lauf noch fehlen, bis ANZAHL_SOLL des Tages erreicht
+# ist. 0 heisst: Regellauf, es gilt ANZAHL_SOLL. Ein Wert groesser 0 heisst:
+# heute steht schon etwas da, und es wird nur die Luecke gefuellt.
+NACHLEGEN: int = 0
+# Die Studien, die heute bereits ausgewaehlt wurden. Sie gehoeren beim
+# Nachlegen mit auf die Seite, sonst wirft der zweite Lauf die Auswahl des
+# ersten herunter.
+HEUTE_BEREITS: list[dict] = []
+
 
 def _fenster(term: str) -> str:
     """Die Abfrage, im Nachtrag auf den Aufnahmetag begrenzt."""
@@ -240,23 +254,31 @@ def schreibe_poolzahlen() -> None:
                    **POOLZAHLEN}, f, ensure_ascii=False, indent=1)
 
 
-def schon_heute_gelaufen() -> bool:
-    """Steht im Archiv bereits eine Studie von heute?
+def heute_im_archiv() -> list[dict]:
+    """Welche Studien stehen heute schon im Archiv?
 
-    Der zweite Zeitplan (05:30 UTC) ist nur ein Netz fuer den Fall, dass der
-    erste ausgefallen ist - am 27.08.2026 hat GitHub die geplanten Laeufe
-    aller dreizehn Repos verschluckt. An normalen Tagen soll er nichts tun:
-    weder PubMed fragen noch das Modell, und schon gar nicht die Auswahl des
-    Tages neu wuerfeln.
+    Der zweite Zeitplan (05:30 UTC) ist ein Netz fuer den Fall, dass der erste
+    ausgefallen ist - am 27.08.2026 hat GitHub die geplanten Laeufe aller
+    dreizehn Repos verschluckt. An normalen Tagen soll er nichts tun: weder
+    PubMed fragen noch das Modell, und schon gar nicht die Auswahl des Tages
+    neu wuerfeln.
+
+    Bis zum 08.11.2026 fragte diese Funktion nur, OB ueberhaupt etwas von
+    heute dasteht. Damit blieb ein duenner Tag duenn: Am 03.11.2026 waehlte
+    das Modell im Versorgungsforschungs-Hub aus 53 Kandidaten genau EINE
+    Studie, und die drei spaeteren Laeufe desselben Tages meldeten
+    "nichts zu tun". Der Lauf galt als erfolgreich, die Seite zeigte einen
+    einzigen Eintrag, und niemand konnte es sehen. Deshalb gibt sie jetzt die
+    Liste zurueck - gezaehlt wird gegen ANZAHL_SOLL, nicht gegen null.
     """
     try:
         with open(ARCHIVE, encoding="utf-8") as f:
             eintraege = json.load(f)
     except FileNotFoundError:
-        return False
+        return []
     heute = dt.datetime.now(ZoneInfo("Europe/Berlin")).date().isoformat()
-    return any(e.get("aufgenommen") == heute and not e.get("nachtrag")
-               for e in eintraege)
+    return [e for e in eintraege
+            if e.get("aufgenommen") == heute and not e.get("nachtrag")]
 
 
 def bekannte_pmids() -> set[str]:
@@ -546,6 +568,13 @@ def pick_studies(abstracts: str, zusatz: str = "") -> list[dict]:
             raise RuntimeError(f"Unerwartete Studienanzahl: {len(studies)}")
         print(f"{len(studies)} Studien geliefert - auf die ersten {ANZAHL_SOLL} gekuerzt.")
         studies = studies[:ANZAHL_SOLL]
+    # Beim Nachlegen wird nur die Luecke des Tages gefuellt. Ohne diese zweite
+    # Kappung brachte ein Nachlege-Lauf volle ANZAHL_SOLL mit, und ein Tag mit
+    # einer schwachen ersten Auswahl haette am Abend zwoelf Studien gehabt.
+    if NACHLEGEN and len(studies) > NACHLEGEN:
+        print(f"Nachlegen: von {len(studies)} gewaehlten werden {NACHLEGEN} "
+              f"uebernommen, mehr fehlt dem Tag nicht.")
+        studies = studies[:NACHLEGEN]
     # Zu wenige dagegen heisst, dass etwas grundsaetzlich schieflief - dann
     # lieber sichtbar scheitern als eine duenne Auswahl veroeffentlichen.
     if len(studies) < ANZAHL_MIN:
@@ -829,7 +858,7 @@ def update_archive(studies: list[dict]) -> int:
 
 
 def main() -> int:
-    global NACHTRAG_TAG
+    global NACHTRAG_TAG, NACHLEGEN, HEUTE_BEREITS
     a = argparse.ArgumentParser(description="Studienauswahl des Tages")
     a.add_argument("--nachtrag", metavar="JJJJ-MM-TT",
                    help="Auswahl fuer einen zurueckliegenden Aufnahmetag nachholen. "
@@ -856,13 +885,31 @@ def main() -> int:
         print(f"Nachtrag fuer den {tag.strftime('%d.%m.%Y')} "
               f"(Aufnahmetag in PubMed, nur Archiv).")
 
-    if not NACHTRAG_TAG and not args.erzwingen and schon_heute_gelaufen():
-        print("Fuer heute stehen bereits Studien im Archiv - nichts zu tun. "
-              "(--erzwingen wuerfelt die Auswahl des Tages neu.)")
-        return 0
+    if not NACHTRAG_TAG and not args.erzwingen:
+        HEUTE_BEREITS = heute_im_archiv()
+        if len(HEUTE_BEREITS) >= ANZAHL_SOLL:
+            print(f"Fuer heute stehen bereits {len(HEUTE_BEREITS)} Studien im "
+                  f"Archiv (Soll {ANZAHL_SOLL}) - nichts zu tun. "
+                  f"(--erzwingen wuerfelt die Auswahl des Tages neu.)")
+            return 0
+        if HEUTE_BEREITS:
+            NACHLEGEN = ANZAHL_SOLL - len(HEUTE_BEREITS)
+            print(f"Heute stehen erst {len(HEUTE_BEREITS)} von {ANZAHL_SOLL} "
+                  f"Studien im Archiv - es werden bis zu {NACHLEGEN} nachgelegt.")
 
-    abstracts = fetch_pubmed()
-    studies = pmid_abgleich(auswahl_pruefen(abstracts))
+    try:
+        abstracts = fetch_pubmed()
+        studies = pmid_abgleich(auswahl_pruefen(abstracts))
+    except RuntimeError as e:
+        # Ein Nachlege-Lauf, der nichts findet, ist KEIN Fehler. Wuerde er
+        # scheitern, erzeugte er an jedem ruhigen Tag eine Fehlermail je Hub -
+        # genau die Flut, die am 05.11.2026 den Blick auf den echten Ausfall
+        # verstellt hat. Der Regellauf scheitert weiterhin sichtbar.
+        if NACHLEGEN:
+            print(f"Nachlegen nicht moeglich ({e}). Die Auswahl des Tages "
+                  f"bleibt bei {len(HEUTE_BEREITS)} Studien.")
+            return 0
+        raise
     meta = fetch_meta([s["pmid"] for s in studies])
     for s in studies:
         s.update(meta.get(s["pmid"], {"author": "", "pubdate": "", "added": "", "_sort": ""}))
@@ -871,6 +918,16 @@ def main() -> int:
     # Reihenfolge - es kann aus einem Abstract kein verlaessliches Datum lesen,
     # weshalb aeltere Studien zwischen neueren standen.
     studies.sort(key=lambda s: s.get("_sort") or "", reverse=True)
+
+    # Beim Nachlegen gehoeren die Studien vom Morgen MIT auf die Seite. Der
+    # Block ersetzt die ganze Auswahl, nicht nur einen Teil davon - ohne diese
+    # Zeile wuerfe der zweite Lauf des Tages die erste Auswahl herunter und
+    # das Nachlegen machte die Lage schlimmer statt besser. Sie stehen vorn
+    # und behalten ihre Reihenfolge: Die Archiveintraege tragen kein _sort,
+    # eine gemeinsame Sortierung waere geraten.
+    if HEUTE_BEREITS:
+        bekannt = {s["pmid"] for s in studies}
+        studies = [e for e in HEUTE_BEREITS if e["pmid"] not in bekannt] + studies
 
     with open(INDEX, encoding="utf-8") as f:
         html = f.read()
