@@ -72,6 +72,7 @@ from thema import ANZAHL_SOLL                    # fuer den Hinweis an duennen T
 # kommen seit dem 04.09.2026 zur Laufzeit aus portal.json, nicht mehr
 # als Platzhalter beim Erzeugen des Portals. Erst dadurch laesst sich
 # diese Datei gemeinsam nutzen.
+import portalwerte
 from portalwerte import (DATEI_PRAEFIX, DOMAIN, MC_GRUPPE_NAME, MC_PRAEFIX, MC_TAG_ID,
                          REPO, THEMA_ASCII, TITEL)
 
@@ -1265,7 +1266,9 @@ def main() -> int:
         print(f"{len(studien)} Studien aus {len(tage(studien))} Tagen -> _probe.html")
         return 0
 
-    key = os.environ.get("MAILCHIMP_API_KEY", "").strip()
+    # schluessel() statt os.environ: entfernt BOM und geschuetzte
+    # Leerzeichen, an denen der Augenhub am 13.11.2026 gescheitert ist.
+    key = portalwerte.schluessel("MAILCHIMP_API_KEY")
     if not key:
         print("MAILCHIMP_API_KEY nicht gesetzt - kein Entwurf angelegt.")
         return 0

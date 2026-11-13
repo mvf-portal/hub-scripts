@@ -23,6 +23,7 @@ Skript von woanders, sagt die Fehlermeldung genau das.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 
 _DATEI = pathlib.Path("portal.json")
@@ -37,6 +38,39 @@ except FileNotFoundError:
         "`python scripts/gemeinsam/build_newsletter.py` aus dem Portal heraus, "
         "nicht aus scripts/."
     ) from None
+
+
+def schluessel(name: str) -> str:
+    """Ein Geheimnis aus der Umgebung, von unsichtbarem Beiwerk befreit.
+
+    **Warum das noetig ist.** Am 13.11.2026 scheiterte der Zeitplan-Lauf des
+    Augenhubs an dieser Zeile tief in requests:
+
+        UnicodeEncodeError: 'latin-1' codec can't encode character
+        '﻿' in position 0
+
+    Im Secret AUGEHUBMC stand ein BOM - das unsichtbare Zeichen, das Windows
+    an den Anfang einer UTF-8-Datei setzt und das beim Kopieren ueber
+    PowerShell oder aus einer Datei mitwandert. Ein API-Schluessel geht als
+    HTTP-Header hinaus, und Header sind latin-1: Das Zeichen bricht die
+    Anfrage, bevor sie abgeschickt wird.
+
+    **`.strip()` reicht dafuer nicht.** `﻿` ist in Python kein
+    Leerraum (Kategorie Cf, nicht Zs) und bleibt stehen. Genau deshalb hat
+    das `.strip()`, das ueberall an diesen Stellen steht, nicht geholfen.
+
+    Gemeldet wird jede Saeuberung. Ein stillschweigend geheilter Schluessel
+    bleibt sonst jahrelang falsch im Repository stehen, und der naechste
+    Dienst, der ihn anders liest, scheitert erneut.
+    """
+    roh = os.environ.get(name, "")
+    sauber = roh.strip().strip("﻿​ ").strip()
+    if sauber != roh.strip():
+        print(f"HINWEIS: {name} enthielt unsichtbare Zeichen am Rand "
+              f"(BOM oder geschuetztes Leerzeichen). Sie sind fuer diesen "
+              f"Lauf entfernt - bitte das Secret sauber neu setzen, "
+              f"unmittelbar aus der Zwischenablage des Anbieters.")
+    return sauber
 
 
 def wert(name: str, standard=None):

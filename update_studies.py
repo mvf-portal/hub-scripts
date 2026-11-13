@@ -41,7 +41,12 @@ from thema import (ANZAHL_MAX, ANZAHL_MIN, ANZAHL_SOLL, EUROPA_ZUERST, KAPPEN,
 # "APIConnectionError: Connection error" - also als Netzproblem, das keines ist.
 # Beim Longevity-Portal hat das am 18.08.2026 zwei Laeufe gekostet. Deshalb hier
 # einmal abschneiden, statt den Fehler spaeter im Secret zu suchen.
-_schluessel = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+# schluessel() statt os.environ: entfernt BOM und geschuetzte
+# Leerzeichen. Ein Anthropic-Schluessel geht genauso als HTTP-Header
+# hinaus wie der von Mailchimp und bricht an derselben Stelle.
+import portalwerte
+
+_schluessel = portalwerte.schluessel("ANTHROPIC_API_KEY")
 if _schluessel:
     os.environ["ANTHROPIC_API_KEY"] = _schluessel
 
