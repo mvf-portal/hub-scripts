@@ -135,6 +135,122 @@ PRAEFIX = MC_PRAEFIX
 # Obergrenze, falls laenger nicht freigegeben wurde. Eine Ausgabe mit 80
 # Studien liest niemand; der Rest bleibt im Archiv und im Hub sichtbar.
 MAX_STUDIEN = 25
+
+# =========================================================================
+# Die drei Spuren (seit 13.11.2026)
+# =========================================================================
+# Zwanzig Hubs heissen fuer jemanden mit drei Interessen drei E-Mails am Tag.
+# Das ist die Menge, bei der Leute abbestellen - nicht wegen des Inhalts,
+# sondern wegen der Frequenz. Seit dem 13.11.2026 gibt es deshalb drei Spuren:
+# taeglich wie bisher, woechentlich freitags, monatlich am ersten Werktag.
+#
+# **Was eine Spur ist und was nicht.** Eine Spur ist nichts weiter als ein
+# eigener Kampagnen-Praefix plus eine eigene Mailchimp-Gruppe. Der ganze
+# uebrige Apparat - Auswahl des Offenen, Torwaechter, Terminierung,
+# Statusdatei - bleibt unveraendert, und das ist der Trick: `datum_aus_titel()`
+# erkennt eine Kampagne an ihrem Praefix, also fuehrt JEDE Spur ihren eigenen
+# Stand. Die Wochenausgabe bekommt damit von selbst genau das, was seit der
+# letzten Wochenausgabe dazugekommen ist. Es braucht keinen zweiten
+# Versandstatus und keine Sonderlogik ueber das Archiv.
+#
+# **Der Praefix muss sich unterscheiden, und zwar am Anfang.**
+# `datum_aus_titel()` prueft mit startswith(). Ein Wochenpraefix, der mit dem
+# Tagespraefix beginnt, liesse die Tagesspur Wochenausgaben fuer ihre eigenen
+# halten - derselbe Fehler, der am 17.08.2026 zwischen zwei Portalen passiert
+# ist. Deshalb wird "-Newsletter" ersetzt, nicht ergaenzt, und spur_setzen()
+# bricht ab, wenn das nicht greift.
+#
+# **Der Tag bleibt der Tagesspur vorbehalten.** TAG_ID ist ein statisches
+# Segment ohne Frequenzangabe; wer den Tag traegt, bekaeme sonst alle drei
+# Spuren. Woche und Monat adressieren ausschliesslich ueber ihre Gruppe.
+SPUREN = {
+    "tag": {
+        "praefix": None,          # MC_PRAEFIX unveraendert
+        "gruppe": None,           # MC_GRUPPE_NAME unveraendert
+        "max": MAX_STUDIEN,
+        "tag_erlaubt": True,      # darf zusaetzlich ueber TAG_ID adressieren
+        "wann": "werktags",
+        "was": "die Studien seit der letzten Ausgabe",
+    },
+    "woche": {
+        "praefix": ("-Newsletter", "-Wochenausgabe"),
+        "gruppe": " woechentlich",
+        "max": 40,
+        "tag_erlaubt": False,
+        "wann": "freitags",
+        "was": "die Studien der Woche",
+    },
+    "monat": {
+        "praefix": ("-Newsletter", "-Monatsausgabe"),
+        "gruppe": " monatlich",
+        "max": 60,
+        "tag_erlaubt": False,
+        "wann": "erster Werktag im Monat",
+        "was": "die Studien des Monats",
+    },
+}
+SPUR = "tag"
+
+
+def spur_setzen(name: str) -> None:
+    """Schaltet Praefix, Gruppe und Obergrenze auf eine der drei Spuren.
+
+    Wird NUR von main() aufgerufen, und ohne --spur gar nicht: Ein Lauf ohne
+    Schalter verhaelt sich Byte fuer Byte wie vor dem 13.11.2026.
+    """
+    global SPUR, PRAEFIX, GRUPPE_NAME, MAX_STUDIEN, TAG_ID, STATUSDATEI
+    if name not in SPUREN:
+        raise SystemExit(f"Unbekannte Spur '{name}'. Bekannt: {', '.join(SPUREN)}")
+    SPUR = name
+    s = SPUREN[name]
+    if s["praefix"]:
+        alt, neu_ = s["praefix"]
+        if alt not in MC_PRAEFIX:
+            raise SystemExit(
+                f"Der Praefix dieses Portals ('{MC_PRAEFIX}') enthaelt '{alt}' "
+                f"nicht, der Spur-Praefix liesse sich nur anhaengen - und ein "
+                f"angehaengter Praefix beginnt mit dem Tagespraefix. Die "
+                f"Tagesspur wuerde die Ausgaben dieser Spur fuer ihre eigenen "
+                f"halten. Bitte mc_praefix in portal.json anpassen.")
+        PRAEFIX = MC_PRAEFIX.replace(alt, neu_)
+        if PRAEFIX.startswith(MC_PRAEFIX) or MC_PRAEFIX.startswith(PRAEFIX):
+            raise SystemExit(
+                f"'{PRAEFIX}' und '{MC_PRAEFIX}' beginnen gleich - siehe oben.")
+    if s["gruppe"]:
+        GRUPPE_NAME = MC_GRUPPE_NAME + s["gruppe"]
+    MAX_STUDIEN = s["max"]
+    if not s["tag_erlaubt"]:
+        TAG_ID = 0
+    # Eigene Statusdatei je Spur. Ohne sie ueberschriebe die Freitagsausgabe
+    # den Tagesbericht, und der Sammelbericht ueber alle Hubs meldete fuer
+    # diesen Hub die Wochenausgabe als Tagesversand.
+    global STATUSDATEI
+    STATUSDATEI = f"versand-status-{name}.json"
+    print(f"Spur '{name}': Praefix '{PRAEFIX}', Gruppe '{GRUPPE_NAME}', "
+          f"hoechstens {MAX_STUDIEN} Studien.")
+
+
+def spur_faellig(spur: str, heute: dt.date) -> tuple[bool, str]:
+    """Ist diese Spur heute dran? Gibt (ja/nein, Begruendung) zurueck."""
+    if spur == "tag":
+        if WOCHENENDE_AUS and heute.weekday() >= 5:
+            return False, "Samstag" if heute.weekday() == 5 else "Sonntag"
+        return True, ""
+    if spur == "woche":
+        # Freitag. Faellt er aus, laeuft die Ausgabe am naechsten Lauf mit -
+        # die Auswahl haengt am letzten Versand, nicht am Kalender.
+        return heute.weekday() == 4, "nicht Freitag"
+    if spur == "monat":
+        # Erster Werktag des Monats: der erste Tag, dessen Vorgaenger alle
+        # entweder im Vormonat liegen oder Wochenende sind.
+        if heute.weekday() >= 5:
+            return False, "Wochenende"
+        erster = heute.replace(day=1)
+        while erster.weekday() >= 5:
+            erster += dt.timedelta(days=1)
+        return heute == erster, f"nicht der erste Werktag (das waere der {erster})"
+    return False, "unbekannte Spur"
+
 # Tagesbericht fuer den Sammelbericht ueber alle Hubs.
 STATUSDATEI = "versand-status.json"
 
@@ -1024,6 +1140,10 @@ def datum_aus_titel(titel: str) -> str | None:
 
 
 def main() -> int:
+    # --spur muss VOR allem anderen ausgewertet werden: spur_setzen() aendert
+    # PRAEFIX und GRUPPE_NAME, und datum_aus_titel() liest PRAEFIX.
+    if "--spur" in sys.argv:
+        spur_setzen(sys.argv[sys.argv.index("--spur") + 1])
     probe = "--probe" in sys.argv
     neu = "--neu" in sys.argv
     # Nur zusammen mit --neu und nur von Hand: hebt den Termin einer bereits
@@ -1087,11 +1207,13 @@ def main() -> int:
         print(f"Nichts offen - zuletzt versendet wurde der Stand vom {seit}.")
         return 0
 
-    if WOCHENENDE_AUS and dt.date.fromisoformat(heute).weekday() >= 5:
-        # Kein Entwurf, keine Terminierung - die offenen Studien laufen am
-        # Montag mit. Die Seite selbst ist da laengst aktualisiert.
-        tag = "Samstag" if dt.date.fromisoformat(heute).weekday() == 5 else "Sonntag"
-        print(f"{tag}: kein Versand. {len(offen)} offene Studien warten auf Montag.")
+    faellig, grund = spur_faellig(SPUR, dt.date.fromisoformat(heute))
+    if not faellig:
+        # Kein Entwurf, keine Terminierung - die offenen Studien laufen beim
+        # naechsten faelligen Lauf dieser Spur mit. Die Seite selbst ist
+        # laengst aktualisiert.
+        print(f"{grund}: kein Versand auf der Spur '{SPUR}'. "
+              f"{len(offen)} offene Studien warten.")
         return 0
 
     entwuerfe = [(k, datum_aus_titel(k.get("settings", {}).get("title", "")))
