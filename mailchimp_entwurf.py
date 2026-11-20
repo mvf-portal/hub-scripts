@@ -465,7 +465,7 @@ def newsletter_html(studien: list[dict], hinweis: str = "",
       <p style="margin:12px 0 0;font:13px/1.6 {FONT};color:#545C63;">
         56 Fachdatenbanken, 29 davon mit Direktsuche &ndash; ein Suchbegriff, alle Quellen.</p>
     </td></tr>
-
+{takthinweis(p)}
     <tr><td style="padding:28px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr><td style="border-top:1px solid #D0D8E4;padding-top:18px;font:12px/1.7 {FONT};color:#777;">
@@ -477,7 +477,7 @@ def newsletter_html(studien: list[dict], hinweis: str = "",
           <p style="margin:0;">
             Sie erhalten diese E-Mail, weil Sie den Studien-Newsletter abonniert haben.<br>
             <a href="*|UNSUB|*" style="color:#777;">Abmelden</a> &middot;
-            <a href="*|UPDATE_PROFILE|*" style="color:#777;">Einstellungen ändern</a> &middot;
+            <a href="https://{DOMAIN}/newsletter.html?{p}&amp;utm_content=fuss-einstellungen" style="color:#777;">Einstellungen ändern</a> &middot;
             <a href="https://{DOMAIN}/#datenschutz" style="color:#777;">Datenschutz</a></p>
         </td></tr>
       </table>
@@ -724,6 +724,60 @@ def rubriken_html(radar: list[dict], news: list[dict],
         zeilen))
 
     return "".join(teile)
+
+
+# ------------------------------------------------------ Hinweis auf den Takt
+#
+# Seit dem 13.11.2026 kann jede:r waehlen, wie oft die Studien kommen sollen.
+# Gemessen am 20.11.2026, eine Woche spaeter: Von rund 250 Bestellungen ueber
+# alle zwanzig Hubs hatten GENAU FUENF Personen je eine Wahl getroffen - eine
+# taeglich, zwei woechentlich, zwei monatlich. Deshalb liefen an jenem Freitag
+# fuenfzehn von zwanzig Wochenausgaben ins Leere.
+#
+# Das lag nicht an der Wahl, sondern daran, dass sie niemand kannte: Sie steht
+# auf der Anmeldeseite, und wer laengst angemeldet ist, sieht die nie wieder.
+#
+# DER KASTEN RAEUMT SICH SELBST AB. Ein Hinweis, der bleibt, ist nach drei
+# Ausgaben Tapete und verdeckt dann den naechsten, der wirklich zaehlt. Nach
+# HINWEIS_BIS verschwindet er ohne weiteres Zutun.
+HINWEIS_BIS = dt.date(2026, 12, 12)
+
+
+def takthinweis(p: str, heute: dt.date | None = None) -> str:
+    """Der Kasten mit der Taktwahl - leer, sobald die Frist abgelaufen ist.
+
+    Verwiesen wird auf UNSERE Newsletterseite, nicht auf *|UPDATE_PROFILE|*.
+    Jener Weg fuehrt auf eine Zwischenseite von Mailchimp, die erst noch eine
+    zweite Mail mit einem Link verschickt, und die Taktwahl steht dort
+    ueberhaupt nicht drin (gemessen am 20.11.2026). Wer zwei Mails braucht,
+    um eine Einstellung zu aendern, aendert sie nicht.
+
+    Die Adresse steht NICHT im Link. Sie gehoerte damit in jedes Protokoll
+    jedes Zwischenservers, und wer den weitergeleiteten Link bekaeme, koennte
+    fremde Einstellungen aendern. Die paar Sekunden Tippen sind der Preis.
+    """
+    if (heute or dt.date.today()) > HINWEIS_BIS:
+        return ""
+    return f"""
+    <tr><td style="padding:26px 28px 0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#FBF7EF;border-left:4px solid {GOLD};">
+        <tr><td style="padding:18px 22px;">
+          <p style="margin:0 0 6px;font:bold 15px/1.4 {FONT};color:{BLAU};">
+            Neu: Sie bestimmen, wie oft</p>
+          <p style="margin:0 0 10px;font:13px/1.6 {FONT};color:#545C63;">
+            Diese Studien m&uuml;ssen nicht jeden Werktag kommen. Seit Kurzem k&ouml;nnen Sie
+            w&auml;hlen: <strong>jeden Werktag</strong>, <strong>einmal die Woche</strong> freitags
+            oder <strong>einmal im Monat</strong>. Die Wahl gilt f&uuml;r alle Ihre
+            Studien-Newsletter zusammen und l&auml;sst sich jederzeit wieder &auml;ndern.</p>
+          <p style="margin:0;font:14px/1.6 {FONT};">
+            <a href="https://{DOMAIN}/newsletter.html?{p}&amp;utm_content=takt"
+               style="color:{GOLD_TIEF};font-weight:bold;">Takt w&auml;hlen</a>
+            <span style="color:#777;">&nbsp;&middot;&nbsp;Sie tragen dort Ihre Adresse ein,
+            eine zweite Best&auml;tigungsmail bekommen Sie nicht.</span></p>
+        </td></tr>
+      </table>
+    </td></tr>"""
 
 
 def sponsor_fuss() -> str:
