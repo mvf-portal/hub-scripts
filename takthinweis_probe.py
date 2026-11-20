@@ -50,7 +50,7 @@ def main() -> int:
     html = M.newsletter_html([studie()])
 
     pruefungen = [
-        ("Kasten ist drin", "Neu: Sie bestimmen, wie oft" in html, True),
+        ("Kasten ist drin", "Jetzt haben Sie die Wahl" in html, True),
         ("Link auf die Newsletterseite", "/newsletter.html?" in html, True),
         ("Abmeldelink unangetastet", "*|UNSUB|*" in html, True),
         ("kein UPDATE_PROFILE mehr", "*|UPDATE_PROFILE|*" in html, False),

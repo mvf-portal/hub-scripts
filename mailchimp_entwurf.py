@@ -764,10 +764,10 @@ def takthinweis(p: str, heute: dt.date | None = None) -> str:
              style="background:#FBF7EF;border-left:4px solid {GOLD};">
         <tr><td style="padding:18px 22px;">
           <p style="margin:0 0 6px;font:bold 15px/1.4 {FONT};color:{BLAU};">
-            Neu: Sie bestimmen, wie oft</p>
+            Jetzt haben Sie die Wahl</p>
           <p style="margin:0 0 10px;font:13px/1.6 {FONT};color:#545C63;">
-            Diese Studien m&uuml;ssen nicht jeden Werktag kommen. Seit Kurzem k&ouml;nnen Sie
-            w&auml;hlen: <strong>jeden Werktag</strong>, <strong>einmal die Woche</strong> freitags
+            Sie bestimmen, wann Sie die Studien k&uuml;nftig bekommen wollen:
+            <strong>jeden Werktag</strong>, <strong>einmal die Woche</strong> freitags
             oder <strong>einmal im Monat</strong>. Die Wahl gilt f&uuml;r alle Ihre
             Studien-Newsletter zusammen und l&auml;sst sich jederzeit wieder &auml;ndern.</p>
           <p style="margin:0;font:14px/1.6 {FONT};">
