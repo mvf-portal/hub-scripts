@@ -1542,13 +1542,33 @@ def main() -> int:
         mc.inhalt(kid, newsletter_html(
             offen, stopp_hinweis(offen, link, beanstandungen) + hinweise,
             rubriken))
-        try:
-            mc.testen(kid, FREIGABE_MAIL)
-            print(f"Testausgabe mit Stopp-Kasten an {FREIGABE_MAIL} verschickt.")
-        except SystemExit as fehler:
-            # Kein Grund abzubrechen: Die Meldung steht ohnehin im
-            # Sammelbericht, und der Kasten muss trotzdem wieder heraus.
-            print(f"Testausgabe konnte nicht verschickt werden: {fehler}")
+        # EIN LEERES SEGMENT IST KEIN FEHLER, SONDERN EIN ZUSTAND.
+        #
+        # Seit dem 23.11.2026, auf Peters Anweisung "nur noch Mails, wenn es
+        # Fehler gibt". An jenem Tag kamen seine vier Hausadressen aus den
+        # Verteilern heraus (24 Ausgaben je Werktag in ein Postfach), und
+        # dabei fielen vier Hubs auf null Empfaenger: Augenheilkunde,
+        # Muskel, Kinder und Genommedizin hatten ausser seinen eigenen
+        # Adressen nie eine einzige. Ohne diese Zeilen haette der
+        # Torwaechter ab dem naechsten Morgen taeglich VIER Testausgaben
+        # geschickt - also genau den Posteingang, den er loswerden wollte,
+        # nur mit anderem Absender.
+        #
+        # Unterdrueckt wird die Mail NUR, wenn das leere Segment die
+        # EINZIGE Beanstandung ist. Kommt irgendetwas anderes dazu, geht
+        # sie hinaus wie bisher. Sichtbar bleibt der Fall in jedem Fall:
+        # Er steht in versand-status.json und damit im Sammelbericht.
+        if beanstandungen == [torwaechter.SEGMENT_LEER]:
+            print("Keine Testausgabe: Das Segment ist leer, und das ist kein "
+                  "Fehler. Der Sammelbericht zeigt den Fall.")
+        else:
+            try:
+                mc.testen(kid, FREIGABE_MAIL)
+                print(f"Testausgabe mit Stopp-Kasten an {FREIGABE_MAIL} verschickt.")
+            except SystemExit as fehler:
+                # Kein Grund abzubrechen: Die Meldung steht ohnehin im
+                # Sammelbericht, und der Kasten muss trotzdem wieder heraus.
+                print(f"Testausgabe konnte nicht verschickt werden: {fehler}")
 
         # Und den Kasten in jedem Fall wieder aus der Kampagne nehmen.
         #
