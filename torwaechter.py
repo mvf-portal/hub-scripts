@@ -154,6 +154,15 @@ def _esummary(pmids: list[str]) -> dict:
 # versehentlicher Vollversand an ueber 10.000 Menschen ist nicht zurueckholbar.
 ANTEIL_MAX = 0.9
 
+# Die eine Beanstandung, die KEIN Fehler ist, sondern ein Zustand: Niemand
+# hat diesen Hub bestellt. Sie steht als Konstante da, weil
+# mailchimp_entwurf.py sie erkennen muss, um dafuer keine Testausgabe zu
+# verschicken. Zwei gleichlautende Zeichenketten in zwei Dateien laufen
+# auseinander, sobald jemand eine davon umformuliert, und dann faellt die
+# Unterdrueckung lautlos weg.
+SEGMENT_LEER = ("das Empfaengersegment ist leer - niemand wuerde die "
+                "Ausgabe bekommen")
+
 
 def _englisch(e: dict) -> int:
     """Englische Funktionswoerter in Titel, Zusammenfassung und Ergebnis."""
@@ -341,7 +350,7 @@ def pruefe(studien: list[dict], html: str = "", empfaenger: int | None = None,
             m.append(f"im HTML fehlen Studien: {', '.join(map(str, fehlend))}")
 
     if empfaenger is not None and empfaenger < 1:
-        m.append("das Empfaengersegment ist leer - niemand wuerde die Ausgabe bekommen")
+        m.append(SEGMENT_LEER)
     if empfaenger and listengroesse and empfaenger >= ANTEIL_MAX * listengroesse:
         m.append(f"das Empfaengersegment umfasst {empfaenger} von {listengroesse} "
                  f"Adressen der ganzen Zielgruppe - das ist kein Segment mehr")
