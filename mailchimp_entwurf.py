@@ -787,14 +787,24 @@ def sponsor_fuss() -> str:
     relativen Pfade auf. Sie zeigt auf das Portal selbst, nicht auf den Server
     des Unterstuetzers - damit gilt auch im Newsletter, was auf der Seite gilt.
 
-    Zwei Arten, zwei Wortlaute (siehe sponsoren.py). Die Medienkooperation
+    Drei Arten, drei Wortlaute (siehe sponsoren.py). Die Medienkooperation
     zeigt ihr Logo groesser und traegt den Unabhaengigkeitssatz als eigenen
     Satz unter der Zeile - in der Fusszeile einer E-Mail gibt es kein
     Kleingedrucktes, in das man ihn schieben koennte.
+
+    Hat ein Hub zwei Arten, bekommt jede ihren eigenen Absatz. Sie in einen zu
+    ziehen hiesse, eine der beiden Zusagen falsch wiederzugeben - ein ideeller
+    Foerderer zahlt nichts, und das darf hier nicht anders stehen als auf der
+    Seite.
     """
+    # Je Art eine Logohoehe. Ein ideeller Foerderer steht zwischen beiden:
+    # groesser als ein Sponsor, weil sein Logo in aller Regel kein
+    # querformatiger Schriftzug ist (siehe den CSS-Block in index.html),
+    # zurueckhaltender als eine bezahlte Kooperation.
+    HOEHE = {sponsoren.KOOP: 48, sponsoren.IDEELL: 44, sponsoren.SPONSOR: 34}
     bloecke = []
     for art, liste in sponsoren.gruppen():
-        hoehe = 48 if art == sponsoren.KOOP else 34
+        hoehe = HOEHE.get(art, 34)
         bilder = "".join(
             f'<a href="{escape(s["u"])}" style="text-decoration:none;">'
             f'<img src="{SEITE}/{escape(s["logo"])}" height="{hoehe}" alt="{escape(s["n"])}"'
@@ -804,8 +814,8 @@ def sponsor_fuss() -> str:
         # hier nicht noch einmal. Beim Sponsor haengt die Zusage gleich an der
         # Zeile, bei der Kooperation steht sie als eigener Satz darunter.
         vor = escape(sponsoren.VOR[art] if art == sponsoren.KOOP
-                     else f'{sponsoren.VOR[sponsoren.SPONSOR]} '
-                          f'– {sponsoren.ZUSATZ[sponsoren.SPONSOR]}')
+                     else f'{sponsoren.VOR[art]} '
+                          f'– {sponsoren.ZUSATZ[art]}')
         fuss = (f'<span style="display:block;margin-top:6px;">'
                 f'{escape(sponsoren.ZUSATZ[sponsoren.KOOP])}</span>'
                 if art == sponsoren.KOOP else "")
